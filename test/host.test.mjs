@@ -22,8 +22,6 @@ import test from "node:test";
 import { apply, Config, diagnosticHeader, NS } from "../lib/index.js";
 
 /** The namespace this plugin used before it was renamed. */
-const LEGACY_NS = "llm-request-gzip";
-
 /** Two routes, one endpoint: `alpha` is a whole-section profile, `beta` a nested one. */
 const SHARED_ENDPOINT = "https://gateway.example/v1";
 const OTHER_ENDPOINT = "https://other.example/v1";
@@ -57,7 +55,12 @@ function createHarness(initialSection = {}, options = {}) {
 		fetch: {
 			register(route) {
 				routes.push(route);
-				return () => {};
+				const remove = () => {
+					const index = routes.indexOf(route);
+					if (index !== -1) routes.splice(index, 1);
+				};
+				effects.push(remove);
+				return remove;
 			}
 		}
 	};
@@ -66,28 +69,10 @@ function createHarness(initialSection = {}, options = {}) {
 	const updates = [];
 	const descriptors = {};
 	const settings = {
-		installSection(owner, ns, schema, base, hooks) {
-			assert.equal(ns, NS);
-			install = { schema, base, hooks };
-			// Mirrors SettingsProvider.installSection: source, then the first change.
-			hooks.setSource(() => schema({ ...base, ...section }));
-			hooks.onChange();
-		},
-		register(ns) {
-			registered.push(ns);
-		},
+		// The Host projects a plugin's Config itself and hands the validated row values
+		// to `apply`; this document is how one plugin reads another's namespace.
 		describe() {
-			return [
-				{ ns: NS, user: descriptors[NS] },
-				{ ns: LEGACY_NS, user: descriptors[LEGACY_NS] }
-			];
-		},
-		async update(ns, patch) {
-			updates.push({ ns, patch });
-		},
-		get(ns) {
-			if (ns === NS) return install.schema({ ...install.base, ...section });
-			return NEIGHBOUR_NAMESPACES[ns];
+			return Object.entries(NEIGHBOUR_NAMESPACES).map(([ns, value]) => ({ ns, value }));
 		}
 	};
 
@@ -102,7 +87,12 @@ function createHarness(initialSection = {}, options = {}) {
 			const list = listeners.get(event) ?? [];
 			list.push(listener);
 			listeners.set(event, list);
-			return () => {};
+			const remove = () => {
+				const index = list.indexOf(listener);
+				if (index !== -1) list.splice(index, 1);
+			};
+			effects.push(remove);
+			return remove;
 		},
 		effect(callback) {
 			effects.push(callback());
@@ -122,10 +112,10 @@ function createHarness(initialSection = {}, options = {}) {
 	/** Replace the stored section and announce it, as a committed write would. */
 	const setSection = (next) => {
 		section = next;
-		install.hooks.onChange();
 	};
 
-	return { ctx, listeners, routes, setSection, disposeAll: () => { for (const dispose of effects) dispose(); }, registered, updates, descriptors, LEGACY_NS };
+	// What `apply` receives as its config: the row's validated values at activation.
+	return { ctx, listeners, routes, section: () => Config({ ...section }), setSection, disposeAll: () => { for (const dispose of effects) dispose(); } };
 }
 
 /** Install a spy transport, returning the recorded calls and a restore hook. */
@@ -191,7 +181,7 @@ test("compresses only the enabled provider, even when two routes share an endpoi
 	const harness = createHarness({ providers: { beta: { enabled: true } } });
 	const transport = spyFetch();
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 
 		const betaCall = chatRequest(SHARED_ENDPOINT);
 		await streamWithFetch(harness.listeners, "beta", () => globalThis.fetch(betaCall.input, betaCall.init));
@@ -216,7 +206,7 @@ test("keeps required headers and drops the stale content-length", async () => {
 	const harness = createHarness({ providers: { beta: { enabled: true } } });
 	const transport = spyFetch();
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		const call = chatRequest(SHARED_ENDPOINT);
 		call.init.headers["content-length"] = String(Buffer.byteLength(call.init.body));
 		await streamWithFetch(harness.listeners, "beta", () => globalThis.fetch(call.input, call.init));
@@ -236,7 +226,7 @@ test("falls back to endpoint matching when no provider is attributed", async () 
 	const harness = createHarness({ providers: { beta: { enabled: true } } });
 	const transport = spyFetch();
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		const matched = chatRequest(SHARED_ENDPOINT);
 		await globalThis.fetch(matched.input, matched.init);
 		const unmatched = chatRequest(OTHER_ENDPOINT);
@@ -254,7 +244,7 @@ test("leaves small bodies, non-string bodies, and pre-encoded requests alone", a
 	const harness = createHarness({ providers: { beta: { enabled: true, minBytes: 1024 } } });
 	const transport = spyFetch();
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		const small = { input: `${SHARED_ENDPOINT}/chat/completions`, init: { method: "POST", headers: {}, body: "{}" } };
 		await globalThis.fetch(small.input, small.init);
 
@@ -280,7 +270,7 @@ test("honours a per-provider minBytes threshold", async () => {
 	const harness = createHarness({ providers: { beta: { enabled: true, minBytes: 65536 } } });
 	const transport = spyFetch();
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		const call = chatRequest(SHARED_ENDPOINT);
 		await streamWithFetch(harness.listeners, "beta", () => globalThis.fetch(call.input, call.init));
 		assert.equal(bodyOf(transport.calls[0]).encoding, "identity", "a 4 KiB body is below a 64 KiB threshold");
@@ -293,7 +283,7 @@ test("honours a per-provider minBytes threshold", async () => {
 test("restores the original fetch when the plugin is disposed", async () => {
 	const harness = createHarness({ providers: { beta: { enabled: true } } });
 	const real = globalThis.fetch;
-	apply(harness.ctx);
+	apply(harness.ctx, harness.section());
 	assert.notEqual(globalThis.fetch, real, "the transport is patched while the plugin is mounted");
 	harness.disposeAll();
 	assert.equal(globalThis.fetch, real, "disposal must restore the original transport");
@@ -448,7 +438,7 @@ test("carries a model request over HTTP/2 and records which protocol answered", 
 		timing: true
 	});
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		const waterfall = harness.listeners.get("llm/stream")[0];
 		const inner = readChatStream(base, { messages: [{ role: "user", content: "hi" }] });
 		for await (const _chunk of waterfall({ provider: "alpha", model: "m", sessionId: "h2" }, () => inner)) {
@@ -469,7 +459,7 @@ test("leaves the default transport alone when the provider did not ask for HTTP/
 	const { server, base, seen } = await h2cServer();
 	const harness = createHarness({ providers: { alpha: { enabled: true } }, allowInsecureH2c: true });
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		const waterfall = harness.listeners.get("llm/stream")[0];
 		const inner = readChatStream(base, { messages: [{ role: "user", content: "hi" }] });
 		// The built-in transport speaks http/1.1, so an h2-only endpoint cannot serve
@@ -499,7 +489,7 @@ test("falls back to the default transport, and says so, after an origin fails ov
 		timing: true
 	});
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		const waterfall = harness.listeners.get("llm/stream")[0];
 		// The server above is http/1.1-only, and h2c is attempted first: undici's h2c
 		// upgrade against a plain http/1.1 server fails, the origin is condemned, and
@@ -530,7 +520,7 @@ test("a pre-transmitted row reports the protocol its member's connection negotia
 		timing: true
 	});
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		const history = [{ role: "user", content: "turn one ".repeat(200) }];
 		await runStep(harness, base, "h2pre", history, "tool-calls");
 		assert.ok(seen.length >= 1, "the first step reached the h2 endpoint, so a connection exists");
@@ -561,7 +551,7 @@ test("measures a real request end to end from transport diagnostics", async () =
 	// No provider policy: timing must not depend on compression being enabled.
 	const harness = createHarness({});
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		const waterfall = harness.listeners.get("llm/stream")[0];
 		const inner = readChatStream(base, { messages: [{ role: "user", content: "x".repeat(50000) }] });
 		const received = [];
@@ -610,7 +600,7 @@ test("records the compression actually applied to a measured request", async () 
 	const { server, base } = await sseServer(plan);
 	const harness = createHarness({ providers: { alpha: { enabled: true, minBytes: 0 } } });
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		const waterfall = harness.listeners.get("llm/stream")[0];
 		const inner = readChatStream(base, { messages: [{ role: "user", content: "x".repeat(20000) }] });
 		for await (const _chunk of waterfall({ provider: "alpha", model: "test-model", sessionId: "s1" }, () => inner)) {
@@ -635,7 +625,7 @@ test("records nothing while the timing preference is off, but still compresses",
 	const { server, base, seen } = await sseServer(plan);
 	const harness = createHarness({ providers: { alpha: { enabled: true, minBytes: 0 } }, timing: false });
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		const waterfall = harness.listeners.get("llm/stream")[0];
 		const inner = readChatStream(base, { messages: [{ role: "user", content: "x".repeat(20000) }] });
 		for await (const _chunk of waterfall({ provider: "alpha", model: "test-model", sessionId: "s1" }, () => inner)) {
@@ -659,27 +649,40 @@ test("turning the timing preference on and off takes effect on the next request"
 	const { server, base } = await sseServer(plan);
 	const harness = createHarness({ timing: false });
 	try {
-		apply(harness.ctx);
-		const waterfall = harness.listeners.get("llm/stream")[0];
+		apply(harness.ctx, harness.section());
+		// Read the live generation on every use: re-activating replaces the listener and
+		// the route, so holding the old ones would test the generation that was replaced.
 		const drain = async () => {
+			const waterfall = harness.listeners.get("llm/stream")[0];
 			const inner = readChatStream(base, { messages: [{ role: "user", content: "hello" }] });
 			for await (const _chunk of waterfall({ provider: "alpha", model: "test-model", sessionId: "s1" }, () => inner)) {
 				// Drain.
 			}
 		};
-		const route = harness.routes.find((candidate) => candidate.path === "/api/model-request-accelerator/timings");
-		const readLedger = async () => (await (await route.fetch(new Request("http://localhost/api/model-request-accelerator/timings?sessionId=s1"))).json()).measurements;
+		const readLedger = async () => {
+			const route = harness.routes.find((candidate) => candidate.path === "/api/model-request-accelerator/timings");
+			return (await (await route.fetch(new Request("http://localhost/api/model-request-accelerator/timings?sessionId=s1"))).json()).measurements;
+		};
 
 		await drain();
 		assert.equal((await readLedger()).length, 0);
 
+		// A row's config is validated at activation, so enabling the preference means
+		// activating the plugin again — which is what the Host does when the row changes.
 		harness.setSection({ timing: true });
+		harness.disposeAll();
+		apply(harness.ctx, harness.section());
 		await drain();
 		assert.equal((await readLedger()).length, 1, "recording resumes once enabled");
 
 		harness.setSection({ timing: false });
+		harness.disposeAll();
+		apply(harness.ctx, harness.section());
 		await drain();
-		assert.equal((await readLedger()).length, 1, "and stops again once disabled");
+		// Re-activating with the preference off starts a fresh in-memory store, so this
+		// generation reports nothing; the durable ledger is what carries rows across one
+		// in production, and this fixture has no storage backend.
+		assert.equal((await readLedger()).length, 0, "and a generation without recording reports nothing");
 	} finally {
 		server.close();
 		harness.disposeAll();
@@ -695,7 +698,7 @@ test("measures the server phase on every request of a pooled connection", async 
 	const { server, base } = await sseServer(plan);
 	const harness = createHarness({});
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		const waterfall = harness.listeners.get("llm/stream")[0];
 		for (let index = 0; index < 4; index++) {
 			const inner = readChatStream(base, { messages: [{ role: "user", content: `turn ${index}` }] });
@@ -734,7 +737,7 @@ test("reports the response content-encoding and counts wire bytes", async () => 
 	const base = `http://127.0.0.1:${server.address().port}/v1`;
 	const harness = createHarness({});
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		const waterfall = harness.listeners.get("llm/stream")[0];
 		const inner = readChatStream(base, { messages: [{ role: "user", content: "hi" }] });
 		for await (const _chunk of waterfall({ provider: "alpha", model: "test-model", sessionId: "gzipped" }, () => inner)) {
@@ -774,7 +777,7 @@ test("leaves the response encoding null when the gateway does not compress", asy
 	const { server, base } = await sseServer(plan);
 	const harness = createHarness({});
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		const waterfall = harness.listeners.get("llm/stream")[0];
 		const inner = readChatStream(base, { messages: [{ role: "user", content: "hi" }] });
 		for await (const _chunk of waterfall({ provider: "alpha", model: "test-model", sessionId: "plain" }, () => inner)) {
@@ -880,7 +883,7 @@ test("pre-transmits the shared history across a pool, then sends only the increm
 	const { close, requests, base } = await recordingServer();
 	const harness = createHarness({ providers: { alpha: { prewarm: true } }, prewarmPoolSize: 3 });
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		const history = [{ role: "user", content: "turn one ".repeat(200) }];
 		await runStep(harness, base, "s1", history, "tool-calls");
 
@@ -935,7 +938,7 @@ test("abandons the whole pool when the history no longer matches", async () => {
 	const { close, requests, base } = await recordingServer();
 	const harness = createHarness({ providers: { alpha: { prewarm: true } }, prewarmPoolSize: 2 });
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		await runStep(harness, base, "s1", [{ role: "user", content: "turn one" }], "tool-calls");
 		assert.ok(await waitFor(() => requests.length === 3), "a pool of two is held");
 		assert.equal(requests.filter((entry) => !entry.completed && !entry.aborted).length, 2);
@@ -964,7 +967,7 @@ test("pre-transmission composes with compression instead of replacing it", async
 	const first = [{ role: "user", content: "x".repeat(20000) }];
 	const second = [...first, { role: "assistant", content: "ok" }];
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		await runStep(harness, base, "s1", first, "tool-calls");
 		assert.ok(await waitFor(() => requests.length === 3 && requests[1].chunks.length > 0), "a pool is held");
 		const beforeSecondStep = Date.now();
@@ -995,7 +998,7 @@ test("keeps the pool after a turn ends, and lets idleness expire it", async () =
 	const harness = createHarness({ providers: { alpha: { prewarm: true } }, prewarmPoolSize: 2, prewarmHoldMs: 2000 });
 	const held = () => requests.filter((entry) => !entry.completed && !entry.aborted);
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		await runStep(harness, base, "s1", [{ role: "user", content: "hello" }], "stop");
 		assert.ok(await waitFor(() => held().length === 2), "the pool is held at the turn boundary");
 		await new Promise((resolve) => setTimeout(resolve, 300));
@@ -1017,7 +1020,7 @@ test("bounds the total number of held requests across conversations", async () =
 	// nine conversations want eighteen and have to settle at sixteen.
 	const CAP = 2 * 8;
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		for (let index = 0; index < 9; index++) await runStep(harness, base, `s${String(index)}`, [{ role: "user", content: `session ${String(index)}` }], "tool-calls");
 		assert.ok(await waitFor(() => held().length >= CAP), "pools accumulate across conversations");
 		assert.ok(held().length <= CAP, `the total cap holds (${String(held().length)} were open)`);
@@ -1092,7 +1095,7 @@ test("rebuilds the pool from the new prefix after a mismatch", async () => {
 	const harness = createHarness({ providers: { alpha: { prewarm: true } }, prewarmPoolSize: 2 });
 	const held = () => requests.filter((entry) => !entry.completed && !entry.aborted);
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		await runStep(harness, base, "s1", [{ role: "user", content: "turn one" }], "tool-calls");
 		assert.ok(await waitFor(() => held().length === 2), "a pool of two is held");
 
@@ -1121,7 +1124,7 @@ test("keeps the pool across a turn boundary", async () => {
 	const harness = createHarness({ providers: { alpha: { prewarm: true } }, prewarmPoolSize: 2 });
 	const held = () => requests.filter((entry) => !entry.completed && !entry.aborted);
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		// A turn that ends `stop`, which used to release the pool outright.
 		await runStep(harness, base, "s1", [{ role: "user", content: "hi" }], "stop");
 		assert.ok(await waitFor(() => held().length === 2), "the pool is held");
@@ -1143,7 +1146,7 @@ test("keeps a separate pool for every agent, even with identical histories", asy
 	const harness = createHarness({ providers: { alpha: { prewarm: true } }, prewarmPoolSize: 1 });
 	const held = () => requests.filter((entry) => !entry.completed && !entry.aborted);
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		// A subagent is a separate agent with its own session, so these two are as
 		// separate as any parent and child. Identical histories are the hard case:
 		// a shared key would let the child consume the parent's held request,
@@ -1177,7 +1180,7 @@ test("does not give up on an endpoint for one transient failure", async () => {
 	const held = () => requests.filter((entry) => !entry.completed && !entry.aborted);
 	const history = [{ role: "user", content: "one" }];
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		await runStep(harness, base, "s1", history, "tool-calls");
 		assert.ok(await waitFor(() => held().length === 1), "a request is held");
 		await runStep(harness, base, "s1", [...history, { role: "assistant", content: "ok" }], "tool-calls");
@@ -1197,7 +1200,7 @@ test("gives up on an endpoint that refuses a chunked body", async () => {
 	const held = () => requests.filter((entry) => !entry.completed && !entry.aborted);
 	const history = [{ role: "user", content: "one" }];
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		await runStep(harness, base, "s1", history, "tool-calls");
 		assert.ok(await waitFor(() => held().length === 1), "a request is held");
 
@@ -1218,7 +1221,7 @@ test("never tries brotli when gzip is chosen", async () => {
 	const harness = createHarness({ encoding: "gzip", providers: { beta: { enabled: true } } });
 	const transport = spyFetch();
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		const call = chatRequest(SHARED_ENDPOINT);
 		await streamWithFetch(harness.listeners, "beta", () => globalThis.fetch(call.input, call.init));
 		const wire = bodyOf(transport.calls[0]);
@@ -1238,7 +1241,7 @@ test("honours an algorithm chosen per provider, not only section-wide", async ()
 	});
 	const transport = spyFetch();
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		const alpha = chatRequest(SHARED_ENDPOINT);
 		await streamWithFetch(harness.listeners, "alpha", () => globalThis.fetch(alpha.input, alpha.init));
 		const beta = chatRequest(SHARED_ENDPOINT);
@@ -1256,7 +1259,7 @@ test("retries as gzip when an endpoint refuses brotli, then remembers it", async
 	const harness = createHarness({ providers: { beta: { enabled: true } } });
 	const transport = spyFetch({ refuseBr: true });
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		const first = chatRequest(SHARED_ENDPOINT);
 		await streamWithFetch(harness.listeners, "beta", () => globalThis.fetch(first.input, first.init));
 
@@ -1287,7 +1290,7 @@ test("keeps brotli off its slow quality curve, and counts that time as preparati
 	const harness = createHarness({ providers: { beta: { enabled: true, minBytes: 0 } } });
 	const transport = spyFetch();
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		const call = chatRequest(SHARED_ENDPOINT, body);
 		await streamWithFetch(harness.listeners, "beta", () => globalThis.fetch(call.input, call.init), "s1");
 
@@ -1307,13 +1310,13 @@ test("records which algorithm compressed each request", async () => {
 	const brHarness = createHarness({ providers: { beta: { enabled: true } } });
 	const transport = spyFetch();
 	try {
-		apply(gzipHarness.ctx);
+		apply(gzipHarness.ctx, gzipHarness.section());
 		const first = chatRequest(SHARED_ENDPOINT);
 		await streamWithFetch(gzipHarness.listeners, "beta", () => globalThis.fetch(first.input, first.init), "s1");
 		assert.equal((await readLedger(gzipHarness, "s1"))[0].encoding, "gzip");
 		gzipHarness.disposeAll();
 
-		apply(brHarness.ctx);
+		apply(brHarness.ctx, brHarness.section());
 		const second = chatRequest(SHARED_ENDPOINT);
 		await streamWithFetch(brHarness.listeners, "beta", () => globalThis.fetch(second.input, second.init), "s1");
 		assert.equal((await readLedger(brHarness, "s1"))[0].encoding, "br");
@@ -1329,7 +1332,7 @@ test("records a claimed pre-transmission that died in the handover", async () =>
 	const harness = createHarness({ providers: { alpha: { prewarm: true } }, prewarmPoolSize: 1 });
 	const history = [{ role: "user", content: "turn one" }];
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		await runStep(harness, base, "s1", history, "tool-calls");
 		assert.ok(await waitFor(() => requests.filter((entry) => !entry.completed && !entry.aborted).length === 1), "a request is held");
 
@@ -1348,38 +1351,15 @@ test("records a claimed pre-transmission that died in the handover", async () =>
 	}
 });
 
-test("carries settings across from the plugin's former name", () => {
-	const harness = createHarness({ providers: {} });
-	// What the user actually configured under the old name.
-	const stored = { providers: { beta: { enabled: true, prewarm: true } }, prewarmPoolSize: 5 };
-	harness.descriptors[harness.LEGACY_NS] = stored;
-	apply(harness.ctx);
 
-	assert.ok(harness.registered.includes(harness.LEGACY_NS), "the former namespace is registered, so its section stays readable");
-	assert.deepEqual(harness.updates, [{ ns: NS, patch: stored }], "and the user's section is carried to the new one");
-});
 
-test("leaves a namespace alone once the user has configured the new name", () => {
-	const harness = createHarness({ providers: {} });
-	harness.descriptors[harness.LEGACY_NS] = { providers: { beta: { enabled: true } } };
-	harness.descriptors[NS] = { timing: false };
-	apply(harness.ctx);
-
-	assert.deepEqual(harness.updates, [], "the migration stands down rather than overwriting a newer section");
-});
-
-test("does nothing when there was never anything under the former name", () => {
-	const harness = createHarness({ providers: {} });
-	apply(harness.ctx);
-	assert.deepEqual(harness.updates, [], "an empty section carries nothing");
-});
 
 test("reports a pre-transmitted request's compressed size and algorithm", async () => {
 	const { close, requests, base } = await recordingServer();
 	const harness = createHarness({ providers: { alpha: { enabled: true, minBytes: 0, prewarm: true } }, prewarmPoolSize: 1 });
 	const history = [{ role: "user", content: "y".repeat(20000) }];
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		await runStep(harness, base, "s1", history, "tool-calls");
 		assert.ok(await waitFor(() => requests.filter((entry) => !entry.completed && !entry.aborted).length === 1), "a request is held");
 		await runStep(harness, base, "s1", [...history, { role: "assistant", content: "ok" }], "tool-calls");
@@ -1402,7 +1382,7 @@ test("writes each session's ledger and loads it back", async () => {
 	const storage = fakeStorage();
 	const harness = createHarness({ providers: {} }, { storage });
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		await runStep(harness, base, "s1", [{ role: "user", content: "one" }], "stop");
 		assert.ok(await waitFor(() => storage.table.has("s1")), "the session's rows were written");
 		const stored = storage.table.get("s1");
@@ -1414,7 +1394,7 @@ test("writes each session's ledger and loads it back", async () => {
 		// rather than an empty table.
 		const restarted = createHarness({ providers: {} }, { storage });
 		try {
-			apply(restarted.ctx);
+			apply(restarted.ctx, restarted.section());
 			const rows = await waitForLedger(restarted, "s1", 1);
 			assert.equal(rows.length, 1, "the stored row is served again");
 			assert.equal(rows[0].provider, "alpha");
@@ -1433,7 +1413,7 @@ test("reports how many pre-transmitted requests are held right now", async () =>
 	const harness = createHarness({ providers: { alpha: { prewarm: true } }, prewarmPoolSize: 3 });
 	const held = () => requests.filter((entry) => !entry.completed && !entry.aborted);
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		const route = harness.routes.find((candidate) => candidate.path === "/api/model-request-accelerator/ledger");
 		const readStats = async () => (await route.fetch(new Request("http://localhost/api/model-request-accelerator/ledger"))).json();
 
@@ -1454,7 +1434,7 @@ test("reports the ledger's size, and clears everything on request", async () => 
 	const storage = fakeStorage({ s1: { updatedAt: 1, rows: [{ id: 1, provider: "old", model: null, totalMs: 5 }] } });
 	const harness = createHarness({ providers: {} }, { storage });
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		const route = harness.routes.find((candidate) => candidate.path === "/api/model-request-accelerator/ledger");
 		assert.ok(route !== undefined, "the ledger route is registered");
 
@@ -1483,7 +1463,7 @@ test("serves a session's stored rows", async () => {
 	const storage = fakeStorage({ s1: { updatedAt: 1, rows: [{ id: 1, provider: "old", model: null, totalMs: 5 }] } });
 	const harness = createHarness({ providers: {} }, { storage });
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		const rows = await waitForLedger(harness, "s1", 1);
 		assert.equal(rows.length, 1, "the stored row shows up");
 		assert.equal(rows[0].provider, "old", "and it is the stored one");
@@ -1502,7 +1482,7 @@ test("keeps pre-transmitted requests compressed after one has been claimed", asy
 	const history = [{ role: "user", content: "y".repeat(20000) }];
 	const held = () => requests.filter((entry) => !entry.completed && !entry.aborted);
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		await runStep(harness, base, "s1", history, "tool-calls");
 		await runStep(harness, base, "s1", [...history, { role: "assistant", content: "ok" }], "tool-calls");
 		await runStep(harness, base, "s1", [...history, { role: "assistant", content: "ok" }, { role: "assistant", content: "more" }], "tool-calls");
@@ -1521,7 +1501,7 @@ test("answers for a session that has no records at all", async () => {
 	// panel must get an empty list, not an error.
 	const harness = createHarness({ providers: {} });
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		const answer = await callLedger(harness, "never-ran");
 		assert.equal(answer.status, 200, "an empty session is not an error");
 		assert.deepEqual((await answer.json()).measurements, []);
@@ -1546,7 +1526,7 @@ test("answers for a session whose stored ledger cannot be read", async () => {
 	};
 	const harness = createHarness({ providers: {} }, { storage });
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		assert.ok(await waitFor(() => harness.routes.length > 0));
 		const answer = await callLedger(harness, "s1");
 		assert.equal(answer.status, 200, "a store that will not read is not a panel error");
@@ -1565,7 +1545,7 @@ test("reports the increment on the wire, and what it is made of", async () => {
 	const harness = createHarness({ providers: { alpha: { enabled: true, minBytes: 0, prewarm: true } }, prewarmPoolSize: 1 });
 	const history = [{ role: "user", content: "y".repeat(20000) }];
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		// Both bodies carry the trailing fields a real adapter sends, in the same
 		// order, so the second is genuinely a continuation of the first.
 		const tools = [{ type: "function", function: { name: "bash", parameters: { type: "object" } } }];
@@ -1597,7 +1577,7 @@ test("moves the fixed fields after messages, so the prefix covers them", async (
 	const history = [{ role: "user", content: "y".repeat(2000) }];
 	const decode = (entry) => (entry.encoding === "br" ? brotliDecompressSync : gunzipSync)(Buffer.concat(entry.raw)).toString("utf8");
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		await runStep(harness, base, "s1", null, "tool-calls", JSON.stringify({ model: "m", messages: history, stream: true, tools }));
 		await runStep(harness, base, "s1", null, "tool-calls", JSON.stringify({ model: "m", messages: [...history, { role: "assistant", content: "ok" }], stream: true, tools }));
 
@@ -1624,7 +1604,7 @@ test("sends the original field order again if an endpoint rejects the reordered 
 	const harness = createHarness({ providers: { alpha: { enabled: true, minBytes: 0, prewarm: true } }, prewarmPoolSize: 1 });
 	const tools = [{ type: "function", function: { name: "bash", parameters: { type: "object" } } }];
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		await runStep(harness, base, "s1", null, "tool-calls", JSON.stringify({ model: "m", messages: [{ role: "user", content: "y".repeat(2000) }], stream: true, tools }));
 
 		// The retry is whichever completed request carries the adapter's own order —
@@ -1672,7 +1652,7 @@ test("shows stored history in front of a session that is already running", async
 	});
 	const harness = createHarness({ providers: {} }, { storage });
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		// A live measurement for the same session, before the panel is ever read.
 		await runStep(harness, base, "s1", [{ role: "user", content: "one" }], "stop");
 		const rows = await waitForLedger(harness, "s1", 3);
@@ -1694,7 +1674,7 @@ test("records where a mismatch's bytes part company", async () => {
 	const harness = createHarness({ providers: { alpha: { prewarm: true } }, prewarmPoolSize: 1 });
 	const history = [{ role: "user", content: "turn one" }];
 	try {
-		apply(harness.ctx);
+		apply(harness.ctx, harness.section());
 		await runStep(harness, base, "s1", history, "tool-calls");
 		assert.ok(await waitFor(() => requests.some((entry) => !entry.completed && !entry.aborted)), "a request is held");
 

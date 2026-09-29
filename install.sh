@@ -66,6 +66,7 @@ else
 		printf -- '- insert:\n'
 		printf '    - id: %s\n' "$PLUGIN_ID"
 		printf "      name: '%s'\n" "$ROW_NAME"
+		printf '      config: {}\n'
 	} >>"$PATCH_FILE"
 fi
 
