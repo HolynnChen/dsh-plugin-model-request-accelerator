@@ -1,0 +1,7 @@
+# This bundle's own rows. The plugin reads its settings from this row's `config`,
+# which the settings page edits; a profile that wants different values overrides
+# this row by the same id.
+- insert:
+    - id: model-request-accelerator
+      name: dsh-plugin-model-request-accelerator
+      config: {}
