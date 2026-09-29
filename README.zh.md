@@ -152,26 +152,25 @@ DSH 自己的那些包（`@deepseek-ai/schemastery`、`zod`、`@deepseek-ai/dsh-
 - **算法**：见下文。
 - **HTTP/2**：该提供方的请求是否在交换层走 HTTP/2。**对开启了预传输的路由默认打开**，其余路由需要手动勾选。
 - **预传输**：见下文。
-- **最小压缩体积**：`1024`，**面板里不提供**。更小的请求原样发送；压缩后若没有真正变小也会放弃压缩。需要别的阈值时在 `settings.yaml` 里设。
+- **最小压缩体积**：`1024`，**面板里不提供**。更小的请求原样发送；压缩后若没有真正变小也会放弃压缩。需要别的阈值时在**装载行的 `config`** 里设 ✓。
 
 共用同一 endpoint 的路由会被归为一组，但它们**各自独立配置** ✓：插件把每一次模型调用归属到发出它的提供方 ✓，由**该提供方自己的开关**决定行为 ✓。只有当请求**完全无法归属**时，才退回按 endpoint 判断 ✓。
 
-设置持久化在 `settings.yaml` 的 `model-request-accelerator` 段：
+设置就是装载行的 **`config`** ✓ —— 设置界面写的就是它 ✓，Host 会用本插件导出的 `Config` 校验它 ✓：
 
 ```yaml
-model-request-accelerator:
-  providers:
-    sg:
-      enabled: true
-      minBytes: 1024
-      prewarm: true
-      http2: true
-  encoding: auto
-  prewarmHoldMs: 120000
-  prewarmPoolSize: 3
-  http2: true
-  allowInsecureH2c: false
-  timing: true
+- insert:
+    - id: dsh-plugin-model-request-accelerator
+      name: './plugins/model-request-accelerator/lib/index.js'
+      config:
+        providers:
+          sg:
+            enabled: true
+            prewarm: true
+        encoding: auto
+        prewarmHoldMs: 120000
+        prewarmPoolSize: 3
+        timing: true
 ```
 
 `encoding` 为 `auto`（**优先 brotli**）或 `gzip`，可按提供方设置，也可整节设置。**面板里的选择是按路由的** ✓ —— 就在表格的「算法」列 ✓；整节的值是**未被单独设置的路由所继承的默认值** ✓。brotli 使用 **quality 9**：实测在相近耗时下比 gzip 小约 5~15%。**刻意不用** brotli 自己的默认值 quality 11——它每 MB 要花约一秒的**同步** CPU（会阻塞事件循环），只换来几个百分点。
@@ -274,7 +273,7 @@ Release notes live in [CHANGELOG.md](./CHANGELOG.md).
 
 ## 更新
 
-插件带三段式版本号（`package.json`，当前 `1.7.6`），设置卡片里会显示它并附一个按钮。**打开卡片时会自动检查**，并把结果显示出来——五分钟内刚查过的结果会被复用而不是重复请求，而按钮始终会重新查一次。点 **检查更新** 会让 Host 去读取仓库 `main` 分支上发布的版本并比较；当远端更新时，按钮变成 **更新到 X**。
+插件带三段式版本号（`package.json`，当前 `2.0.0`），设置卡片里会显示它并附一个按钮。**打开卡片时会自动检查**，并把结果显示出来——五分钟内刚查过的结果会被复用而不是重复请求，而按钮始终会重新查一次。点 **检查更新** 会让 Host 去读取仓库 `main` 分支上发布的版本并比较；当远端更新时，按钮变成 **更新到 X**。
 
 更新动作就是在插件自己的目录里执行 fast-forward 拉取——和安装脚本做的事一样——不经 shell 且带超时。两侧只要有一侧版本号无法解析，就绝不视为「更新」，因此一个笔误不会造成降级。**更新之后，插件仍然运行旧代码，直到重启 `dsh web`**；卡片上会写明这一点。
 

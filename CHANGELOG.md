@@ -4,6 +4,44 @@ Three-part versions. The panel's **检查更新** button compares the installed
 `package.json` with the one on `main`, so an entry here is worth a release only when
 something a user can see has changed.
 
+## 2.0.0
+
+**Settings now live in the loader row's `config`. Read the second item before upgrading.**
+
+- **The plugin registers the way the current service works.** The Host half called
+  `settings.installSection`, which no longer exists. Nothing threw — the Host's own
+  routes stayed up — but no section was registered either, so the settings document
+  the page reads had no entry for this plugin: its page rendered with every provider
+  switch off and disabled, and no way to turn the timing panel on. A plugin that
+  exports `Config` is projected by the settings service now, and its live values
+  arrive as `apply`'s second argument; this does that, using the `Config` export that
+  was already there.
+- **Move your settings into the row.** DSH 0.1 kept them in `settings.yaml`, and 0.2
+  imports that file into each entry's `config` — but only for entries whose plugin
+  registered a `Config`, which this one never did, so its section was left behind (it
+  is still readable in `~/.dsh/settings.yaml.imported`). Add a `config:` block:
+
+  ```yaml
+      - id: dsh-plugin-model-request-accelerator
+        name: '/absolute/path/to/lib/index.js'
+        config:
+          providers:
+            sg:
+              enabled: true
+              prewarm: true
+          encoding: auto
+          prewarmHoldMs: 120000
+          prewarmPoolSize: 5
+          timing: true
+  ```
+
+  Anything left out takes its default: every provider disabled, `encoding` `auto`, a
+  pool of 3, a hold of 120000ms, `timing` on.
+- The endpoint index reads other plugins' namespaces from the settings document, since
+  the service has no per-key read, and refreshes on `settings/document-updated` rather
+  than the old `settings/updated`.
+- The installer writes `config: {}` into the row it adds.
+
 ## 1.7.6
 
 - **The settings entry is matched wherever its name sits in the id.** The live entry

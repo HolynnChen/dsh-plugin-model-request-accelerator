@@ -142,26 +142,27 @@ The page is an entry in **Settings** of its own, beside General, Models and Plug
 - **Algorithm** — **brotli at quality 9** by default, measured at roughly 5–15% smaller than gzip for a comparable amount of time. Brotli's own default is quality 11, which is deliberately not used: it costs about a second of *synchronous* CPU per megabyte, blocking the event loop, for only a few percent more. A request body has no negotiation, so if an endpoint answers a shape rejection (411/415/501) to a brotli body the request is retried as gzip — the adapter never sees a failure it would not have seen uncompressed — and that endpoint is remembered, so brotli is attempted there exactly once. Choose `gzip` to never attempt it.
 - **HTTP/2** — whether this provider's requests go out over HTTP/2. **On by default for a route that pre-transmits**, off until asked for otherwise.
 - **Pre-transmission** — see below.
-- **Minimum body size** — `1024`, not offered in the card. Smaller requests are sent as-is, and compression is skipped whenever it would not actually make the body smaller. Set it in `settings.yaml` if a gateway wants a different threshold.
+- **Minimum body size** — `1024`, not offered in the card. Smaller requests are sent as-is, and compression is skipped whenever it would not actually make the body smaller. Set it in the row's `config` if a gateway wants a different threshold.
 
 Routes that share one endpoint are grouped, and **each one is configured independently**: the plugin attributes every model call to the provider that issued it, and that provider's own switches decide. The endpoint only decides when a request cannot be attributed at all.
 
-Settings persist under the `model-request-accelerator` key of `settings.yaml`:
+Settings are the loader row's `config`, which the settings page edits and the Host validates against this plugin's `Config` export:
 
 ```yaml
-model-request-accelerator:
-  providers:
-    sg:
-      enabled: true
-      minBytes: 1024
-      prewarm: true
-      http2: true
-  encoding: auto
-  prewarmHoldMs: 120000
-  prewarmPoolSize: 3
-  http2: true
-  allowInsecureH2c: false
-  timing: true
+- insert:
+    - id: dsh-plugin-model-request-accelerator
+      name: './plugins/model-request-accelerator/lib/index.js'
+      config:
+        providers:
+          sg:
+            enabled: true
+            prewarm: true
+        encoding: auto
+        prewarmHoldMs: 120000
+        prewarmPoolSize: 3
+        http2: true
+        allowInsecureH2c: false
+        timing: true
 ```
 
 `encoding` is `auto` (prefer **brotli**) or `gzip`, settable per provider or section-wide. In the card the choice is **per route**, in the table's 算法 column; the section value is what a route inherits until it sets its own.
@@ -296,7 +297,7 @@ Release notes live in [CHANGELOG.md](./CHANGELOG.md).
 
 ## Updating
 
-The plugin carries a three-part version (`package.json`, currently `1.7.6`), and the settings card shows it with a button. **Opening the card checks by itself** and says so — a check that ran in the last five minutes is reused rather than repeated, and the button always asks afresh. **检查更新** asks the Host for the version published on the repository's `main` branch and compares the two; when the published one is newer the button becomes **更新到 X**.
+The plugin carries a three-part version (`package.json`, currently `2.0.0`), and the settings card shows it with a button. **Opening the card checks by itself** and says so — a check that ran in the last five minutes is reused rather than repeated, and the button always asks afresh. **检查更新** asks the Host for the version published on the repository's `main` branch and compares the two; when the published one is newer the button becomes **更新到 X**.
 
 The update itself is a fast-forward pull in the plugin's own directory — exactly what the installer does — run without a shell and with a timeout. A version that cannot be parsed on either side is never treated as newer, so a typo cannot offer a downgrade. **After an update the plugin still runs the old code until `dsh web` is restarted**; the card says so.
 
