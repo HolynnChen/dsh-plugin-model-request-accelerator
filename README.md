@@ -1,113 +1,75 @@
 # dsh-plugin-model-request-accelerator
 
-**模型请求加速 / model request accelerator** — compress model request bodies, pre-transmit the shared history, and break down where each request spends its time.
+**模型请求加速** — make DeepSeek Harness model requests smaller and get them moving sooner, and show where each one spends its time.
 
-Three things for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) model calls, each configurable per provider in Settings → Plugins:
+Three things, each switchable per provider:
 
-- **Request-body compression** — brotli, falling back to gzip — which shrinks what a relay has to chew through before it dispatches.
-- **Pre-transmission** — the shared history goes onto the wire before the request that needs it exists, so a step uploads only its increment.
-- **Request timing breakdown** — a view beside the Trajectory that splits every model call into its phases, with tokens-per-second.
+| | What it does | Default |
+| --- | --- | --- |
+| **Compression** | Compresses the request body (brotli, falling back to gzip) before it is uploaded | Off |
+| **Pre-transmission** | Puts the shared conversation history on the wire before the request that needs it, so a step uploads only its increment | Off |
+| **Request timing** | A view beside the Trajectory that splits every model call into its phases | On |
 
 > 中文文档：[README.zh.md](./README.zh.md)
 
-## Compression: what it actually does
+## Contents
 
-This trips people up, so read it first:
+- [What it does](#what-it-does)
+- [Requirements](#requirements)
+- [Install](#install)
+- [Configure](#configure)
+- [Confirm it works](#confirm-it-works)
+- [If something goes wrong](#if-something-goes-wrong)
+- [Updating](#updating)
+- [Uninstall](#uninstall)
+- [More](#more)
 
-| Direction | Default today | This plugin |
-| --- | --- | --- |
-| Response (downstream) | Node's undici `fetch` **already sends** `accept-encoding: gzip, deflate` and decompresses the reply automatically | Does nothing — there is nothing to enable |
-| Request (upstream) | Not compressed; a JSON body carrying a long context and base64 images is uploaded as-is | **Compresses it** and adds `content-encoding: br`, or `gzip` where brotli is refused |
+## What it does
 
-Measured on a real session: a 3.8 MB request body becomes 1.46 MB (38%), and the increment the request still has to write at claim time is a few hundred bytes.
+**Compression targets the upload, not the reply.** Responses are already compressed — Node's `fetch` sends `accept-encoding: gzip, deflate` and decompresses automatically, and this plugin does nothing about that. What is *not* compressed is the request: a JSON body carrying a long context and base64 images goes up as-is. That is the half this plugin shrinks.
 
-Both shipped adapters (`dsh-llm-deepseek`, `dsh-llm-pi-ai`) call the global `fetch` directly and the adapter seam exposes no header hook, so this plugin owns that seam for the lifetime of its fiber and restores the original `fetch` when the plugin is stopped or removed.
+**Pre-transmission targets the round trip.** A multi-turn request re-sends its entire history every step. A long history does not reach the far end instantly, and a relay's per-request work — token counting, quota checks, body logging, WAF scanning — grows with the bytes it has received. Sending the history early means the step that needs it appends a few hundred bytes instead of megabytes.
 
-## Request timing
+**Timing shows you what happened.** Every model call is split into preparation, send, server, first-token and generation phases, with tokens per second and the provider's prefix-cache hit rate, so you can see whether any of the above is helping.
 
-A view of its own appears next to **Trajectory** in the conversation view switcher, for as long as the preference above is on. It lists every model request of the current session, newest first, and splits each one:
+Measured on a real session: a **3.8 MB** request body became **1.46 MB**, with a few hundred bytes left for the step itself to write.
 
-```
-stream begins ──▶ fetch() ──────▶ body sent ──────▶ first token ──────▶ end
-      │             │                │                  │              │
-      │          prepare          send            TTFT    │        generation
-      │                            └──── server ─────┘   │              │
-      └────────────────────────── total ───────────────────────────────┘
-```
-
-| Column | Meaning |
-| --- | --- |
-| 时间 / time | When the request was issued, to the second. |
-| 提供方 / 模型 | Provider route, model, purpose (compaction or session title), a `br` or `gzip` chip naming the algorithm actually used, and a running or failed badge. |
-| 发送 / send | The request being issued → **the body fully sent**. |
-| 服务端 / server | Body sent → response headers received. |
-| 首token | Wait until the first token: from the request being issued, or — for a pre-transmitted row — from the member being claimed. The server's own think time (from the body being sent) is in the row tooltip. |
-| 生成 / generation | First token → stream end. |
-| tok/s | Output tokens ÷ the generation window. |
-| 缓存 / cache | Share of the prompt the provider served from its prefix cache. `inputTokens` counts *uncached* input only, so the prompt is cached + uncached and the rate is cached ÷ (cached + uncached); the raw counts are on hover. |
-| 请求体 / request body | `before → after` when the body was compressed, otherwise the single serialized size. |
-| 响应体 / response body | Bytes actually received **on the wire**, plus the response's `content-encoding` when it declares one — so a compressed reply is labelled rather than merely looking small. A `–` means no chunk was attributed at all, which is a wiring fault to see rather than an empty reply. |
-| 总计 / total | Fetch call → stream end. |
-
-Every column header explains itself on hover, and hovering a row shows what does not fit: the preparation time (stream start → request issued), the input/output token counts, and the response size with its encoding.
-
-The table fills the panel by fixed column shares — the provider/model text takes the largest one and the numeric columns take what their values need — so it neither leaves the panel half empty nor stretches whichever value happens to be longest.
-
-The conversation column's own width handles are shell chrome, rendered for whichever view is active, so a view cannot un-render them — but they carry a stable `data-width-handle` attribute. While this view is mounted it installs one stylesheet rule, `[data-width-handle]{display:none}`, and removes it again on unmount: the transcript cannot be resized by a stray drag over the table, and every other view keeps the handle. The panel also asks the shell's scroller to reveal its top on open, because arriving from a live transcript would otherwise drop it at the bottom. The rows scroll inside the panel with the header pinned to the top of that box. The panel measures the space actually left below it — its own top, the shell's published `--dsh-composer-height`, and a small margin — and bounds itself to that, so it fits one screen and the shell's own scroller never appears alongside it. It has to measure rather than rely on `height: 100%`, because the shell gives the view area an `auto` height while a session is active. Both behaviours live in the two mount effects at the top of `TimingView` in `lib/client.js`; remove them and the panel behaves like every other view again.
-
-### Prefix reuse
-
-Prefill dominates a long-conversation request, and the shared prefix is the part worth not recomputing. That reuse is a **server-side** mechanism — providers hash the prompt prefix and reuse the computed KV cache — so the client's only lever is keeping the prefix byte-stable across turns, which DSH already does. The cache column is how you see whether it is working: it reports the provider's own accounting, so a high share means the prefill was largely skipped.
-
-**Prefix reuse is not the same as pre-transmission.** The reuse above is the provider's own KV cache. Sending the prefix early is a different lever, and it does help — just not by starting inference sooner. A `/chat/completions` body is one JSON document and no relay begins inference before it is complete, but a relay's *other* per-request work is proportional to the bytes it has received — token counting, quota pre-checks, body logging, WAF scanning — and that work can dominate TTFT once a context reaches hundreds of KB. A request whose history is already on the wire when the increment is appended therefore finishes that work sooner, and what it has to append is a few hundred bytes rather than megabytes. See **Pre-transmission** below for how it is held and what it requires of the endpoint.
-
-### Why this differs from the Trajectory's TTFT
-
-The Trajectory's own timing panel measures TTFT from the **start of the step** (`firstTokenTime - stepStartTime`), which folds body serialization and request sending into the wait. The Trajectory is a shipped bundle with no extension point for that panel, so this breakdown is delivered as its own view instead — and its "发送" boundary is the part the Trajectory cannot show.
-
-### How it measures, and why nothing is guessed
-
-`send` comes from undici's own `undici:request:bodySent` diagnostic — the moment the transport finished writing the body — and `server` from `undici:request:headers`. Response bytes come from `undici:request:bodyChunkReceived`, which reports **wire** bytes. All three are consumed through `node:diagnostics_channel`, so **measuring never modifies the request**: the timing view alone leaves the body with its `content-length`. Compression and pre-transmission do rewrite the request, deliberately and visibly in the panel — the first compresses the body, the second sends it in two parts, which is why a pre-transmitted request carries a chunked body and its row says so.
-
-Those channels are process-wide, and the ones on the response side are also **socket-scoped**: on a pooled keep-alive connection they run inside the async context of whichever request first opened that socket. Reading the ambient context there attributes `headers` to an older, already-finished request — which is exactly why a naive implementation reports the server phase for the first request on a connection and `null` for every one after it. This plugin pairs each measurement with the undici request object at `undici:request:create` (which still runs in the caller's context) and looks every later diagnostic up by that identity, so pooled requests keep their phases. `test/host.test.mjs` asserts this on four sequential requests over one connection and fails if the pairing is reverted.
-
-Measurements are held in memory on the Host (last 100 per session, last 40 sessions) and served to the page over the product's own authenticated `/api` route. They are also **persisted per session**, one document per conversation in the deployment's storage backend, so reopening a session — or restarting DSH — shows its history rather than an empty panel. A profile without a storage backend keeps them in memory only.
+**Nothing is enabled for you.** Every provider starts off. Turn one on, confirm it works, then try the next.
 
 ## Requirements
 
-- DSH with the `web` profile (this plugin ships a browser half for the settings card).
-- Node.js >= 20 (bundled with DSH).
+- DeepSeek Harness, with a profile that has a browser UI (the `web` profile ships one).
+- Node.js >= 20. The one bundled with DSH is fine.
 
 ## Install
-
-### One command
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/HolynnChen/dsh-plugin-model-request-accelerator/main/install.sh | sh
 ```
 
-It clones the plugin into `$DSH_HOME/profiles/web/plugins/model-request-accelerator` and appends its loader entry to
-`cordis.patch.yml`, leaving an already-registered entry alone, and replacing the empty array a pristine patch layer still consists of — appending after `[]` would produce a file YAML rejects. Safe to re-run. Target another profile with
-`DSH_HOME=... DSH_PROFILE=... sh`.
+That clones the plugin into `$DSH_HOME/profiles/web/plugins/model-request-accelerator` and registers it in the profile's `cordis.patch.yml`. It is safe to re-run — it fast-forwards an existing checkout, leaves an existing entry alone, and **never overwrites settings you have changed**. For another profile or DSH home:
 
-Then **reload the browser tab** and open **Settings**, where **模型请求加速** is a page of its own.
+```bash
+DSH_HOME=~/.dsh DSH_PROFILE=web sh install.sh
+```
 
-### Manual install
+Then **reload the browser tab** (the settings page is part of the page's module graph, so an open tab will not have it) and open **Settings → 模型请求加速**.
 
-`DSH_HOME` defaults to `~/.dsh`; the steps below assume the `web` profile.
+<details>
+<summary>Manual install</summary>
 
-#### 1. Put the package inside your profile
+**1. Clone it into your profile**
 
 ```bash
 git clone https://github.com/HolynnChen/dsh-plugin-model-request-accelerator.git \
   "${DSH_HOME:-$HOME/.dsh}/profiles/web/plugins/model-request-accelerator"
 ```
 
-No install step is needed for dependency resolution: Node walks up from the plugin directory into the profile's own hoisted `node_modules`, where DSH's own packages (`@deepseek-ai/schemastery`, `zod`, `@deepseek-ai/dsh-storage-domain`) already live. If that does not hold for your layout, run `npm install --omit=dev` inside the cloned directory.
+No dependency install is usually needed: Node walks up from the plugin directory into the profile's own `node_modules`, where DSH's packages already live. If your layout differs, run `npm install --omit=dev` in the cloned directory.
 
-#### 2. Register it in the profile's patch layer
+**2. Register it**
 
-`${DSH_HOME:-$HOME/.dsh}/profiles/web/cordis.patch.yml` is a top-level YAML **array** of patch entries. Append:
+Append to `${DSH_HOME:-$HOME/.dsh}/profiles/web/cordis.patch.yml`, which is a top-level YAML array:
 
 ```yaml
 - insert:
@@ -115,42 +77,35 @@ No install step is needed for dependency resolution: Node walks up from the plug
       name: './plugins/model-request-accelerator/lib/index.js'
 ```
 
-The `name` resolves relative to the profile directory, so a relative path keeps working across machines. An absolute path works too.
+The relative `name` resolves against the profile directory, so it keeps working across machines. An absolute path works too.
 
-> Prefer pnpm-managed installs? `dsh plugin --profile web add github:HolynnChen/dsh-plugin-model-request-accelerator` (requires `pnpm` on `PATH`) installs it into the profile, after which the same entry can use `name: 'dsh-plugin-model-request-accelerator'`.
+**3. Reload the page.**
 
-#### 3. Reload the page
-
-The `web` profile sets `patchReload: live`, so DSH watches `cordis.patch.yml` and re-composes the tree without a restart. **Reload the browser tab** — the client module graph is injected at page load, so an already-open page will not have the card.
-
-Then open **Settings** and choose **模型请求加速** in its list.
-
-> **Updating an installed copy.** `patchReload: live` watches `cordis.patch.yml`, *not* plugin sources, so an edited Host half is only picked up by restarting `dsh web`. The browser bundle is different: it is re-read from disk, so a page reload is enough for the client half. Do both when in doubt.
+</details>
 
 ## Configure
 
-The page is an entry in **Settings** of its own, beside General, Models and Plugins. It shows:
+Everything is on one page: **Settings → 模型请求加速**, beside General, Models and Plugins.
 
-**The plugin switch**
+**Two plugin-wide switches**
 
-- **Timing records** — how many sessions and how many bytes the ledger holds, with a **清空** button beside it. Clearing removes both the stored documents (including sessions this process never loaded) and what the running process holds; it cannot be undone, and the row says so.
-- **Show the Request timing view** — default on. Turning it off also stops the Host recording timings, so a deployment that does not want the view pays nothing for it. The view tab appears and disappears immediately; no page reload is needed.
+- **Timing records** — how much the ledger holds, with a **清空** button. Clearing is permanent, and it also drops what the running process holds.
+- **Show the Request timing view** — off means the Host stops recording timings too, so a deployment that does not want the view pays nothing for it. Takes effect immediately, no reload.
 
 **One row per provider route**
 
-- **Toggle** — compress this provider's model requests.
-- **Algorithm** — **brotli at quality 9** by default, measured at roughly 5–15% smaller than gzip for a comparable amount of time. Brotli's own default is quality 11, which is deliberately not used: it costs about a second of *synchronous* CPU per megabyte, blocking the event loop, for only a few percent more. A request body has no negotiation, so if an endpoint answers a shape rejection (411/415/501) to a brotli body the request is retried as gzip — the adapter never sees a failure it would not have seen uncompressed — and that endpoint is remembered, so brotli is attempted there exactly once. Choose `gzip` to never attempt it.
-- **HTTP/2** — whether this provider's requests go out over HTTP/2. **On by default for a route that pre-transmits**, off until asked for otherwise.
-- **Pre-transmission** — see below.
-- **Minimum body size** — `1024`, not offered in the card. Smaller requests are sent as-is, and compression is skipped whenever it would not actually make the body smaller. Set it in the row's `config` if a gateway wants a different threshold.
+- **Toggle** — compress this provider's requests.
+- **Algorithm** — `brotli` (default) or `gzip`.
+- **HTTP/2** — on by default for a route that pre-transmits, off until asked for otherwise.
+- **Pre-transmission** — off by default.
 
-Routes that share one endpoint are grouped, and **each one is configured independently**: the plugin attributes every model call to the provider that issued it, and that provider's own switches decide. The endpoint only decides when a request cannot be attributed at all.
+Routes that share one endpoint are configured **independently**, because every model call is attributed to the provider that issued it. The endpoint is only consulted when a request cannot be attributed at all.
 
-Settings are the loader row's `config`, which the settings page edits and the Host validates against this plugin's `Config` export:
+If you prefer a file, these are the same settings — the loader row's `config`, which the page edits for you. The page is the safer way to change them, since the Host validates writes against the plugin's schema and refuses a bad one:
 
 ```yaml
 - insert:
-    - id: dsh-plugin-model-request-accelerator
+    - id: model-request-accelerator
       name: './plugins/model-request-accelerator/lib/index.js'
       config:
         providers:
@@ -165,59 +120,20 @@ Settings are the loader row's `config`, which the settings page edits and the Ho
         timing: true
 ```
 
-`encoding` is `auto` (prefer **brotli**) or `gzip`, settable per provider or section-wide. In the card the choice is **per route**, in the table's 算法 column; the section value is what a route inherits until it sets its own.
+Every key, and what each does, is in **[docs/CONFIGURATION.md](./docs/CONFIGURATION.md)** — including the two things worth reading before you turn compression on: what compression can and cannot help, and what pre-transmission requires of your gateway.
 
-### HTTP/2 (on by default for a route that pre-transmits)
+### The short version
 
-**Set the expectation first**: this is not a switch that makes requests several times faster. In a real stored measurement a 2.37 MB request spends **1.1 ms** in `sendMs` and **3391 ms** in `serverMs` — the upload stopped being the bottleneck the moment compression and pre-transmission went in, and no protocol buys back the provider's thinking time. What it is worth is two things:
+- **Compression** needs the far end to decode it. gzip is near-universal; brotli is not. If an endpoint refuses a brotli body the plugin retries as gzip, remembers, and never tries brotli there again — so the worst case is one wasted request, once. You can ask first instead:
 
-1. **HPACK header compression.** Pre-transmission re-sends the *same* multi-kilobyte headers every step; HTTP/2 sends only the delta. That is the same idea as pre-transmission itself, applied to headers instead of the body.
-2. **Multiplexing.** The held pool of pre-transmitted requests shares one connection instead of contending for several, and no handshake is repeated.
+  ```bash
+  node scripts/probe-encodings.mjs https://your-gateway.example/v1
+  ```
 
-**Why it needs its own code.** Node's `globalThis.fetch` **speaks HTTP/1.1 only**: its dispatcher is the built-in undici's own `Agent`, undici negotiates h2 only when `allowH2` is *explicitly* passed, the built-in Agent does not pass it — and the built-in Agent class is not reachable from application code (`process.getBuiltinModule` does not resolve node's internal undici, and that specifier is not a public builtin). So the built-in transport has no knob to turn.
+- **Pre-transmission** needs an endpoint that accepts a **chunked** request body. If yours does not, it switches off for that endpoint by itself.
+- **HTTP/2** is not a speed switch. The upload is not the bottleneck once compression is on; what h2 buys is header compression for the repeated requests and one connection for the held pool. If your gateway does not speak it, requests continue on HTTP/1.1 — nothing breaks.
 
-What does work is a **consistent pair**: dsh's own `undici` package, driving its own `fetch` with its own `Agent({ allowH2: true })`. The two undici instances must never be crossed — handing an 8.x Agent to the built-in 7.x `fetch` fails at dispatch time with `invalid onRequestStart method` — which is the single rule `lib/transport.js` exists to enforce: **both halves from one module instance, or h2 stays off.**
-
-**Degradation is the protocol's own, not a retry state machine.** h2 is reached through ALPN, so an endpoint that does not offer it simply continues on http/1.1 through the same Agent — no error, and no signal to detect. All `lib/transport.js` handles is what ALPN cannot cover: a transport that fails outright, or an `http://` endpoint (which would need cleartext h2c, off by default — see below). One failure condemns that origin for the life of the plugin, so the cost of a bad endpoint is **one** extra round trip ever, not one per request.
-
-**The panel tells the truth, and the timing view does too.** A timing row carries an `h2` chip **only when the response really came back on h2**. This matters: undici announces `h2` on its connection diagnostic *before* a cleartext upgrade is proven, so an attempt the far end refuses also announces `h2` and then fails — treating "asked for h2" as "used h2" would label a failed request as h2. The plugin holds the negotiated version until the send has actually succeeded, and a test pins that. An endpoint that genuinely negotiates h2 says **nothing** in the settings card (there is nothing to report); an abandoned one says so. `test/transport.test.mjs` covers both, plus the origin check that keeps one host's negotiation off another host's row.
-
-**HTTP/3 is not available on this stack**, so this plugin does not offer it: undici contains **no** HTTP/3 or QUIC code, and Node 24.12 ships neither `nghttp3` nor `ngtcp2` (`node:quic` exists as a builtin but has no QUIC stack behind it). The only route would be a separate HTTP/3 client library with a hand-built transport, which would **lose every undici diagnostic** — the timing breakdown and the pre-transmission pool both rest on them. For a gateway that advertises only h2, that trade buys nothing.
-
-`allowInsecureH2c` defaults to `false`. With it on, an `http://` endpoint also uses HTTP/2, over a **cleartext h2c connection with no certificate**; enable it only when you trust that link.
-
-### Pre-transmission (opt-in, per provider)
-
-A multi-turn request re-sends its entire history every step. With **预传输 / pre-transmission** enabled for a provider, the plugin keeps a **pool of held requests** per conversation and puts the shared history on the wire before the request that needs it even exists — because a long history does not reach the far end instantly, and the longer it is, the longer a relay chain takes to carry it.
-
-Each conversation's pool holds `prewarmPoolSize` members (default `3`). Members are opened at staggered moments and **advanced as content becomes known**, so the one that gets consumed has already been in flight for several steps rather than for one:
-
-- **Open** — a model call goes out, so its own history is known; every member is advanced to it, and the pool is refilled. The bytes are slices of the request that was just captured — never reconstructed.
-- **Reorder** — the adapters put `messages` second and everything fixed after it: the tool schemas above all, then the stream flag, the tool choice and the rest. A prefix can only be the beginning of a body, so none of that could ever be pre-sent and was uploaded again on every request. Since JSON objects are unordered, the plugin moves `messages` to the end — one key, every other field left in place — and the whole fixed part then travels inside the prefix. The live increment falls from about 50KB of text to just the new turn, under a kilobyte on the wire. It is deliberately minimal and refused whenever it cannot be proven byte-safe: the body must be exactly `JSON.stringify` output, so re-serializing leaves every field's own bytes alone. A relay that matches on the body's shape answers 400/422; that request is then sent again in the adapter's own order, the endpoint is remembered, and the pools built in the rejected order are released.
-- **Consume** — the next request claims the member whose bytes it continues **furthest**, and whose headers still match; the survivors are advanced and the pool refilled. Members sit at different depths, so the deepest match leaves the least to write.
-- **Keep** — a step that ends the turn (`stop`, `max-tokens`, an error, an interruption) rather than `tool-calls` leaves the pool exactly where it is. A finished conversation is usually a pause, and the next question repeats the same history, so the members would have been reused verbatim. The hold timer owns them instead, and it measures **idleness**: it restarts on every advance, so a member expires only after `prewarmHoldMs` with nothing happening. Nothing reconnects while a conversation sits idle, because members are opened by a captured request and by nothing else. A mismatch is the same: the pool is abandoned and rebuilt from the prefix that was just captured, so the following step is pre-transmitted again.
-
-The pool belongs to one **agent**, not to a session tree. A subagent is a separate agent with its own session id, and the loop stamps each request with its own agent's session, so a child's pool never mixes with its parent's — even when the two histories are byte-identical, which is the case a shared pool would silently corrupt.
-
-The one thing shared across agents is the decision to stop pre-transmitting to an **endpoint**, because whether it accepts a chunked body is a property of the endpoint rather than of the conversation asking. It takes a shape rejection (411/415/501), which retrying cannot fix, or three consecutive failures — so one transient 5xx or rate limit does not switch the feature off everywhere.
-
-A held member carries a chunked body, because its length cannot be known before the increment is. If an endpoint answers badly — or refuses a chunked body — pre-transmission switches off for that endpoint, and a shape rejection (411/415/501) is resent as an ordinary request.
-
-The ledger is **durable per session**: rows are stored one document per session in the deployment's storage backend (`~/.dsh/storages`, via the storage domain layer), so reopening a session — or restarting the harness — shows its history rather than an empty panel. A profile without a storage backend keeps the ledger in memory, exactly as before.
-
-Rows that used it carry a **预热** chip; hover it for the pre-sent bytes, the increment, and how long the member was held. That last number is the lead time actually won, and it is the honest way to tell whether a longer pool is worth anything on a given link.
-
-Compression and pre-transmission compose: the split keeps **one** codec stream open across every part, so the parts decompress as a single body and the compression is kept rather than traded away.
-
-The held requests are closed by themselves, in every case. A consumed member is finished by writing its increment and closing the body (`stream.close()`), after which undici returns the socket to its keep-alive pool rather than closing it — the same connection then serves later requests. Each of those is a **brand-new HTTP request** on a reused connection: the far end runs its per-request work — routing, quota, token counting — exactly as it would on a fresh socket, and only the TCP and TLS handshakes are skipped. Transport diagnostics behave the same way: they are socket-scoped, which is why the server phase went missing on every pre-transmitted request but the first until the measurement was paired with its own request object. An abandoned member is aborted by whichever path abandoned it: the hold timer, a mismatch, a refused body, the pool being released, or the plugin unloading. Nothing has to be closed by hand, and nothing lingers past `prewarmHoldMs` of idleness.
-
-### Safety notes
-
-- Every provider is **off by default**.
-- Confirm your gateway accepts the encoding before relying on it for the provider serving your current session. Brotli is not universal, which is why the fallback and `scripts/probe-encodings.mjs` exist; gzip is near-universal, so a gateway that rejects it is rare. If it does not support what is being sent, that provider's requests will fail.
-- If the rewrite itself throws, the plugin falls back to sending the request uncompressed: a bug in this plugin cannot break model requests.
-
-### Confirming it works
+## Confirm it works
 
 The Host logs one line per compressed request:
 
@@ -225,224 +141,43 @@ The Host logs one line per compressed request:
 model-request-accelerator: sg request compressed 3813841 -> 1461179 bytes
 ```
 
-`endpoint-matched` appears instead of a provider name when a request could not be attributed to a provider (see below).
+Open the **Request timing** view beside the Trajectory to watch requests as they happen. A row shows the algorithm it used (`br`/`gzip`), whether it was pre-transmitted (**预热**), and how long the request was held before it was claimed — that last number is the lead time actually won.
 
-## How provider attribution works
+## If something goes wrong
 
-A request URL is all the `fetch` layer sees, and when several provider routes share one endpoint — as they do when e.g. `llm-deepseek` and `llm-pi-ai.providers.sg` both point at the same gateway — the URL alone cannot tell them apart. Matching on it would make a per-provider switch behave per-endpoint.
+**Model requests fail, or answer strangely.** Turn the provider's switch off in the settings page. The change is live — no restart — and every provider starts off, so this is always reversible.
 
-So the plugin hooks the `llm/stream` waterfall and binds the streaming call's provider into an `AsyncLocalStorage` scope. Each iterator resumption runs inside that scope, so the identity survives the adapter's internal `await`s (image serialization, file uploads) and concurrent streams cannot clobber each other. Endpoint matching is only a fallback for requests with no attributed provider, where the longest matching endpoint wins and the policies of the routes on it are OR-ed.
+**A request failed after enabling compression.** Your gateway may not accept that encoding. The plugin retries once as gzip automatically; if gzip is refused too, compression is switched off for that endpoint. If an endpoint answers `411`/`415`/`501` to a compressed body, that is the shape rejection it handles. Check with `scripts/probe-encodings.mjs`, or set **Algorithm** to `gzip`.
 
-### Why not a dynamic Cordis plugin?
+**Pre-transmission is not being used** (no **预热** chip). Either the request could not be attributed to a provider, or the endpoint refused a chunked body and pre-transmission was switched off for it. The settings card reports the second case; `endpoint-matched` in the log means the first.
 
-Dynamic plugins run in a `node:vm` sandbox where `fetch` and `require` are trapped to throw, `process` is `undefined`, and there is no zlib, `Buffer`, or `CompressionStream`. Such a plugin can neither compress a body nor reach the realm the adapters fetch from, so this has to be a file-loaded Cordis plugin.
+**HTTP/2 is not being used** (no `h2` chip). Most likely your gateway does not offer it — in which case requests continue over HTTP/1.1 and nothing is wrong. A `h2` chip appears **only when a response really came back over h2**, so its absence is not a failure. An endpoint the plugin gave up on is named in the settings card.
+
+**The settings page is empty, or saving says it is "overridden".** That means the plugin's configuration is not where this version reads it. See **[docs/UPGRADING.md](./docs/UPGRADING.md)**.
+
+**Something looks broken and you want out.** Delete the plugin's entry from `cordis.patch.yml` and reload the page. See [Uninstall](#uninstall).
+
+## Updating
+
+The settings card shows the version with a button. **Opening the card checks by itself**; **检查更新** asks again and compares against the repository's `main`. When the published version is newer the button becomes **更新到 X**, and it does a fast-forward pull of the plugin's own directory.
+
+**After updating, restart `dsh web`.** The Host half is loaded at startup and is not picked up by the live reload; the browser half only needs a page reload.
+
+Upgrading from **1.7.x** has its own migration, which the installer runs for you — see **[docs/UPGRADING.md](./docs/UPGRADING.md)**.
 
 ## Uninstall
 
-Delete the `model-request-accelerator` entry from `cordis.patch.yml` (and the cloned directory). The change is live; reload the page and the card is gone.
+Delete the `model-request-accelerator` entry from `cordis.patch.yml`, and the cloned directory if you want it gone. The change is live; reload the page and the card is gone.
 
-## Tests
+## More
 
-```bash
-npm test
-```
-
-- `test/host.test.mjs` runs the real `apply()` against a fake Cordis context and a spied `globalThis.fetch`, covering schema resolution, the settings hook contract, `llm/stream` attribution, and the fetch rewrite. Its fixture deliberately reproduces the awkward case — two routes sharing one endpoint — to prove the switch is genuinely per-provider. It also measures a **real** request end to end: a local SSE endpoint whose think time, first-token delay and decode window are separated on purpose, driven through the plugin's real transport diagnostics.
-- `test/client.test.mjs` executes the real browser bundle under a stubbed module loader and a hook-tracking React stand-in, so it can render the card, click it and re-render: that the bundle id matches the package name, that the card registers on the settings namespace and starts **collapsed**, that the timing switch writes a top-level field, and that the timing view is registered only while the preference is on — including that it stays undecided until the first section arrives and is added or removed as the preference changes.
-- `test/timing.test.mjs` drives the phase arithmetic with injected clocks, so every boundary is asserted at an exact millisecond, including the cases where a phase is genuinely absent.
-- `test/prewarm.test.mjs` covers the prefix scanner and the field reordering against bodies of both shapes, including the ones that must be refused.
-- `test/transport.test.mjs` covers the h2 decision and its fallback with both injection points faked, so none of it needs a network: the TLS/opt-in rules, one Agent per origin, the refusal to cross two undici instances, a failure condemning an origin exactly once, an abort *not* condemning it, and the announced-but-failed connection that must not be reported as a protocol.
-- `test/version.test.mjs` covers three-part comparison, including the cases a string comparison gets wrong and the ones that must not be read as an update.
-- `test/install.test.mjs` runs the installer against throwaway profiles, twice each, from a pristine patch layer, one that already has entries, an empty file and no file at all — pinning the case where an empty array must be replaced rather than appended to, and that an upgrade from 1.7.x gains its old settings exactly once.
-- `test/migrate.test.mjs` covers the migration: the section found in `.imported` and in a backup, a row that already carries settings left untouched, a malformed patch refused rather than half-written, an absent field staying absent so the schema's default still applies, and the stated provider field list failing the build when it drifts from the schema.
-
-## Layout
-
-| File | Role |
-| --- | --- |
-| `install.sh` | One-command installer: clones the package into the profile and registers it in `cordis.patch.yml`. |
-| `lib/compress.js` | Compression decision core: policy compilation, endpoint index, attribution resolution, the encoding plan, header rewriting. No Cordis, globals, or zlib, so it is directly unit-testable. |
-| `lib/timing.js` | Timing state machine: phase boundaries, throughput, the per-session ring buffer, and the summary the page renders. Pure over injected clocks. |
-| `lib/index.js` | Host half: settings section, `llm/stream` attribution, the timing measurement and its authenticated `/api` route, `globalThis.fetch` patch and restore. |
-| `lib/client.js` | Browser half: the settings card and the request-timing view. Plain CJS factory contract, no JSX or ESM syntax. |
-| `lib/prewarm.js` | Pre-transmission core: the shared-prefix scanner, the field reordering, and the body-shape checks. Pure, so it is unit-testable. |
-| `lib/transport.js` | The HTTP/2 transport: resolves one undici module instance, pairs its `fetch` with its own `allowH2` Agent, decides per request, and condemns an origin that failed. Optional by construction — with no undici resolvable, h2 is simply off. |
-| `lib/ledger.js` | The durable per-session store, built on the deployment's storage domain. |
-| `lib/version.js` | Three-part version parsing and comparison, which the update button reads. |
-| `scripts/migrate-legacy-settings.mjs` | Moves a 1.7.x `settings.yaml` section into the loader row this version reads. Idempotent, and never overwrites settings the page has written. |
-| `scripts/probe-encodings.mjs` | Asks an endpoint which request encodings it decodes, before there is traffic to learn from. |
-| `README.zh.md` | Chinese documentation. |
+- **[docs/CONFIGURATION.md](./docs/CONFIGURATION.md)** — every setting, and the two worth understanding before enabling them. ([中文](./docs/CONFIGURATION.zh.md))
+- **[docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)** — symptoms, causes, what to check. Includes the plain-language limits of what this plugin can do. ([中文](./docs/TROUBLESHOOTING.zh.md))
+- **[docs/UPGRADING.md](./docs/UPGRADING.md)** — upgrading, including the 1.7.x settings migration. ([中文](./docs/UPGRADING.zh.md))
+- **[docs/INTERNALS.md](./docs/INTERNALS.md)** — how it works and why it is built this way: the diagnostics it measures with, the h2 transport, the pre-transmission pool, HTTP/3 and signed bodies, and why this cannot be a dynamic plugin. The honest limits live here.
+- **[docs/CONTRIBUTING.md](./docs/CONTRIBUTING.md)** — the test suite, and the habits that have actually found bugs here.
+- **[CHANGELOG.md](./CHANGELOG.md)** — release notes.
 
 ## License
 
 [MIT](./LICENSE)
-
-## Protocols
-
-The plugin reads the request body's **shape**, not a protocol name. Pre-transmission and the field reordering need a top-level array that a conversation is appended to, and both chat-completions (`messages`) and Anthropic-shaped (`messages`) bodies have one, as do Responses-shaped bodies (`input`). A body whose `input` is a plain string has no such array and gets no pre-transmission rather than a wrong one — the panel reports it as `不适用` instead of an empty pool. Request-body compression and the timing breakdown are transport-level and apply to every protocol.
-
-## What each endpoint has taught us
-
-The settings card reports, per endpoint, what real traffic has established: whether a compressed body was ever refused (and so whether gzip has taken over from brotli), whether pre-transmission was switched off because the endpoint would not take a chunked body, and how many compression attempts have failed in a row. It is a record of observations, not a probe — nothing is sent to produce it — and it stays **silent until there is something to report**, so an endpoint that has behaved simply says nothing. `scripts/probe-encodings.mjs` remains the way to ask the question before any traffic exists.
-
-## What this cannot do
-
-The plugin sits at `fetch`, so it only ever sees requests that go through it, and it only rewrites bodies it can prove are safe to rewrite.
-
-- **Signed bodies are left alone.** A request carrying `x-amz-content-sha256` (AWS-style signing) never has its body compressed: the signature covers the body's bytes, so compressing it would break the signature, and the resulting authorization failure is not a shape rejection — the fallback that recovers from a refused encoding would never trigger. Bedrock-style transports are out of scope for the same reason the reference implementation lists them as such.
-- **Transports that do not use `fetch`** — WebSocket, or an SDK with its own HTTP stack — are never seen at all.
-- **HTTP/3 is out of reach on this stack.** undici has no HTTP/3 or QUIC code, and Node 24.12 ships neither `nghttp3` nor `ngtcp2`, so there is nothing to drive it with — and a hand-built HTTP/3 transport would cost every undici diagnostic the timing view and the pre-transmission pool depend on. HTTP/2 is offered because it is a transport swap on the same diagnostics, not a replacement for them.
-- **Compression needs the far end to decode it.** gzip is near-universal; brotli is not. If an endpoint answers 411/415/501 to a compressed body the plugin retries it as gzip, remembers the endpoint, and gets out of the way; `scripts/probe-encodings.mjs` answers the same question up front, with a one-token request instead of a real conversation.
-- **The plugin can be slower than the wrapper, not faster.** It moves bytes off the critical path and shrinks them; it does not change what the model does with them.
-
-Release notes live in [CHANGELOG.md](./CHANGELOG.md).
-
-## Updating
-
-The plugin carries a three-part version (`package.json`, currently `2.1.0`), and the settings card shows it with a button. **Opening the card checks by itself** and says so — a check that ran in the last five minutes is reused rather than repeated, and the button always asks afresh. **检查更新** asks the Host for the version published on the repository's `main` branch and compares the two; when the published one is newer the button becomes **更新到 X**.
-
-The update itself is a fast-forward pull in the plugin's own directory — exactly what the installer does — run without a shell and with a timeout. A version that cannot be parsed on either side is never treated as newer, so a typo cannot offer a downgrade. **After an update the plugin still runs the old code until `dsh web` is restarted**; the card says so.
-
-### Upgrading from 1.7.x
-
-What you have to do depends on where you are coming from, and one of the three cases
-needs nothing at all.
-
-| Coming from | What happens | What to do |
-| --- | --- | --- |
-| 1.7.x, upgrading straight to 2.1.0 or later | dsh imports the section itself, because this version's `Config` is one dsh can import | Nothing. Check the settings page shows your providers |
-| Already on 2.0.0–2.0.3 | That release registered no importable `Config`, so dsh left your section behind | Re-run the installer, or the migrator by hand |
-| Already on 2.x and the section is gone | `.imported` was edited or deleted after the upgrade | The migrator falls back to a `settings.yaml.bak-*`; if there is none, set it up again in the page |
-
-**The installer carries them across by itself**, so for most people the upgrade is just
-running it again. The migrator can also be run on its own, and can be asked what it
-would do first:
-
-```sh
-node scripts/migrate-legacy-settings.mjs --profile web --dry-run   # show what it would write
-node scripts/migrate-legacy-settings.mjs --profile web             # write it
-```
-
-Either way it prints which file it read, so there is nothing to guess at:
-
-```
-==> migrated your 1.7.x settings from /Users/you/.dsh/settings.yaml.imported
-```
-
-If it says `no settings to migrate: ...` instead, read the rest of the line — it names
-the reason, and the three reasons are all fine: the row already carries settings, there
-is no row yet (so register it first), or there is no legacy section left to find. Exit
-code `3` means "nothing to do" rather than a failure, which is what the installer keys
-off; `1` means a real failure, and the installer says so and leaves the file alone.
-
-#### Why this is needed at all
-
-1.7.x kept settings in `$DSH_HOME/settings.yaml`, keyed by this plugin's section id, and
-2.x reads them from the loader row's `config` instead. dsh migrates old sections by
-itself, but only for a plugin entry that exposes a `Config` with a volatile field —
-1.7.x's Host half registered none, having called `settings.installSection`, which 0.2
-removed. So this plugin's section was the one dsh left behind, and the symptom was an
-upgrade that booted with every provider off, offered no row to configure, and refused a
-save with `Configuration for "model-request-accelerator" is overridden by a home patch
-or command-line overlay`. **2.1.0's `Config` is importable**, so this cannot happen again
-for anyone upgrading from here.
-
-#### Where it looks
-
-`settings.yaml` first — a file a user wrote by hand is the newer statement of intent —
-then `settings.yaml.imported`, which is where dsh renames the old file and where a
-section the import rejected stays, then any `settings.yaml.bak-*`. That last fallback
-exists because `.imported` is an ordinary file: editing or deleting it is easy, and
-doing so leaves a backup as the only copy left.
-
-#### What it will not do
-
-- **It never overwrites a row that already carries settings.** Both the migrator and the
-  settings page write the same block, so re-running the installer cannot undo a change
-  you made in the page. Every run after the first reports nothing to do.
-- **It never invents a value.** A field the current version no longer declares is
-  dropped, and an absent field stays absent so the schema's default still applies
-  instead of being pinned into the row. A provider whose policy holds nothing this
-  version reads is reported rather than written as an empty object.
-- **It runs even if you installed the plugin by hand.** It finds `yaml` through dsh's
-  own tree, so it works from a checkout whose dependencies were never installed.
-
-## Uninstall
-
-Delete the `model-request-accelerator` entry from `cordis.patch.yml` (and the cloned directory). The change is live; reload the page and the card is gone.
-
-## Tests
-
-```bash
-npm test
-```
-
-- `test/host.test.mjs` runs the real `apply()` against a fake Cordis context and a spied `globalThis.fetch`, covering schema resolution, the settings hook contract, `llm/stream` attribution, and the fetch rewrite. Its fixture deliberately reproduces the awkward case — two routes sharing one endpoint — to prove the switch is genuinely per-provider. It also measures a **real** request end to end: a local SSE endpoint whose think time, first-token delay and decode window are separated on purpose, driven through the plugin's real transport diagnostics.
-- `test/client.test.mjs` executes the real browser bundle under a stubbed module loader and a hook-tracking React stand-in, so it can render the card, click it and re-render: that the bundle id matches the package name, that the card registers on the settings namespace and starts **collapsed**, that the timing switch writes a top-level field, and that the timing view is registered only while the preference is on — including that it stays undecided until the first section arrives and is added or removed as the preference changes.
-- `test/timing.test.mjs` drives the phase arithmetic with injected clocks, so every boundary is asserted at an exact millisecond, including the cases where a phase is genuinely absent.
-- `test/prewarm.test.mjs` covers the prefix scanner and the field reordering against bodies of both shapes, including the ones that must be refused.
-- `test/transport.test.mjs` covers the h2 decision and its fallback with both injection points faked, so none of it needs a network: the TLS/opt-in rules, one Agent per origin, the refusal to cross two undici instances, a failure condemning an origin exactly once, an abort *not* condemning it, and the announced-but-failed connection that must not be reported as a protocol.
-- `test/version.test.mjs` covers three-part comparison, including the cases a string comparison gets wrong and the ones that must not be read as an update.
-- `test/install.test.mjs` runs the installer against throwaway profiles, twice each, from a pristine patch layer, one that already has entries, an empty file and no file at all — pinning the case where an empty array must be replaced rather than appended to, and that an upgrade from 1.7.x gains its old settings exactly once.
-- `test/migrate.test.mjs` covers the migration: the section found in `.imported` and in a backup, a row that already carries settings left untouched, a malformed patch refused rather than half-written, an absent field staying absent so the schema's default still applies, and the stated provider field list failing the build when it drifts from the schema.
-
-## Layout
-
-| File | Role |
-| --- | --- |
-| `install.sh` | One-command installer: clones the package into the profile and registers it in `cordis.patch.yml`. |
-| `lib/compress.js` | Compression decision core: policy compilation, endpoint index, attribution resolution, the encoding plan, header rewriting. No Cordis, globals, or zlib, so it is directly unit-testable. |
-| `lib/timing.js` | Timing state machine: phase boundaries, throughput, the per-session ring buffer, and the summary the page renders. Pure over injected clocks. |
-| `lib/index.js` | Host half: settings section, `llm/stream` attribution, the timing measurement and its authenticated `/api` route, `globalThis.fetch` patch and restore. |
-| `lib/client.js` | Browser half: the settings card and the request-timing view. Plain CJS factory contract, no JSX or ESM syntax. |
-| `lib/prewarm.js` | Pre-transmission core: the shared-prefix scanner, the field reordering, and the body-shape checks. Pure, so it is unit-testable. |
-| `lib/transport.js` | The HTTP/2 transport: resolves one undici module instance, pairs its `fetch` with its own `allowH2` Agent, decides per request, and condemns an origin that failed. Optional by construction — with no undici resolvable, h2 is simply off. |
-| `lib/ledger.js` | The durable per-session store, built on the deployment's storage domain. |
-| `lib/version.js` | Three-part version parsing and comparison, which the update button reads. |
-| `scripts/migrate-legacy-settings.mjs` | Moves a 1.7.x `settings.yaml` section into the loader row this version reads. Idempotent, and never overwrites settings the page has written. |
-| `scripts/probe-encodings.mjs` | Asks an endpoint which request encodings it decodes, before there is traffic to learn from. |
-| `README.zh.md` | Chinese documentation. |
-
-## License
-
-[MIT](./LICENSE)
-
-## Protocols
-
-The plugin reads the request body's **shape**, not a protocol name. Pre-transmission and the field reordering need a top-level array that a conversation is appended to, and both chat-completions (`messages`) and Anthropic-shaped (`messages`) bodies have one, as do Responses-shaped bodies (`input`). A body whose `input` is a plain string has no such array and gets no pre-transmission rather than a wrong one — the panel reports it as `不适用` instead of an empty pool. Request-body compression and the timing breakdown are transport-level and apply to every protocol.
-
-## What each endpoint has taught us
-
-The settings card reports, per endpoint, what real traffic has established: whether a compressed body was ever refused (and so whether gzip has taken over from brotli), whether pre-transmission was switched off because the endpoint would not take a chunked body, and how many compression attempts have failed in a row. It is a record of observations, not a probe — nothing is sent to produce it — and it stays **silent until there is something to report**, so an endpoint that has behaved simply says nothing. `scripts/probe-encodings.mjs` remains the way to ask the question before any traffic exists.
-
-## What this cannot do
-
-The plugin sits at `fetch`, so it only ever sees requests that go through it, and it only rewrites bodies it can prove are safe to rewrite.
-
-- **Signed bodies are left alone.** A request carrying `x-amz-content-sha256` (AWS-style signing) never has its body compressed: the signature covers the body's bytes, so compressing it would break the signature, and the resulting authorization failure is not a shape rejection — the fallback that recovers from a refused encoding would never trigger. Bedrock-style transports are out of scope for the same reason the reference implementation lists them as such.
-- **Transports that do not use `fetch`** — WebSocket, or an SDK with its own HTTP stack — are never seen at all.
-- **HTTP/3 is out of reach on this stack.** undici has no HTTP/3 or QUIC code, and Node 24.12 ships neither `nghttp3` nor `ngtcp2`, so there is nothing to drive it with — and a hand-built HTTP/3 transport would cost every undici diagnostic the timing view and the pre-transmission pool depend on. HTTP/2 is offered because it is a transport swap on the same diagnostics, not a replacement for them.
-- **Compression needs the far end to decode it.** gzip is near-universal; brotli is not. If an endpoint answers 411/415/501 to a compressed body the plugin retries it as gzip, remembers the endpoint, and gets out of the way; `scripts/probe-encodings.mjs` answers the same question up front, with a one-token request instead of a real conversation.
-- **The plugin can be slower than the wrapper, not faster.** It moves bytes off the critical path and shrinks them; it does not change what the model does with them.
-
-Release notes live in [CHANGELOG.md](./CHANGELOG.md).
-
-## Updating
-
-The plugin carries a three-part version (`package.json`, currently `2.1.0`), and the settings card shows it with a button. **Opening the card checks by itself** and says so — a check that ran in the last five minutes is reused rather than repeated, and the button always asks afresh. **检查更新** asks the Host for the version published on the repository's `main` branch and compares the two; when the published one is newer the button becomes **更新到 X**.
-
-The update itself is a fast-forward pull in the plugin's own directory — exactly what the installer does — run without a shell and with a timeout. A version that cannot be parsed on either side is never treated as newer, so a typo cannot offer a downgrade. **After an update the plugin still runs the old code until `dsh web` is restarted**; the card says so.
-
-### Upgrading from 1.7.x
-
-Your settings are carried across by the installer, or by this on its own:
-
-```sh
-node scripts/migrate-legacy-settings.mjs --profile web --dry-run   # show what it would write
-node scripts/migrate-legacy-settings.mjs --profile web             # write it
-```
-
-1.7.x kept them in `$DSH_HOME/settings.yaml`, keyed by this plugin's section id, and 2.0 reads them from the loader row's `config` instead. dsh migrates old sections itself, but only for a plugin entry that exposes a `Config` with a volatile field — and 1.7.x's Host half registered none, because it called `settings.installSection`, which 0.2 removed. So this plugin's section is the one dsh leaves behind, which is why an upgrade used to boot with every provider off, offer no row to configure, and refuse a save with `Configuration for "model-request-accelerator" is overridden by a home patch or command-line overlay`.
-
-The migrator reads the section from wherever it survived — `settings.yaml`, then `settings.yaml.imported`, where dsh renames it and where a rejected section stays, then any `settings.yaml.bak-*` — and writes it into the plugin's row. That last fallback exists because `.imported` is an ordinary file: editing or deleting it is easy, and doing so leaves a backup as the only copy left. It is safe to re-run: it does nothing once the row carries settings, and **it never overwrites a row the settings page has already written**, because both edit the same block. Fields the current version no longer declares are dropped rather than guessed at; a provider whose policy holds nothing this version reads is reported, not written as an empty object.
-

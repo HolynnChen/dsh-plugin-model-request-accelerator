@@ -4,6 +4,30 @@ Three-part versions. The panel's **检查更新** button compares the installed
 `package.json` with the one on `main`, so an entry here is worth a release only when
 something a user can see has changed.
 
+## 2.2.0
+
+- **The README is now for using the plugin, and the depth moved into `docs/`.** It had
+  grown to four times the length of its own Chinese translation, and the material aimed
+  at someone *operating* the plugin was mixed in with material aimed at someone
+  *modifying* it — CSS quirks, undici diagnostic scoping, why a dynamic Cordis plugin
+  cannot work. Both audiences were served badly by that. The README is now 180 lines:
+  what it does, install, configure, confirm, and a troubleshooting section organised by
+  symptom.
+
+  Five documents carry the rest: **[CONFIGURATION](./docs/CONFIGURATION.md)** for every
+  setting and the two worth understanding before enabling them,
+  **[TROUBLESHOOTING](./docs/TROUBLESHOOTING.md)** for symptoms and the plain-language
+  limits, **[UPGRADING](./docs/UPGRADING.md)**, **[INTERNALS](./docs/INTERNALS.md)** for
+  how it works and why, and **[CONTRIBUTING](./docs/CONTRIBUTING.md)** for the suite and
+  the habits that have actually found bugs here. `CONFIGURATION`, `TROUBLESHOOTING` and
+  `UPGRADING` have Chinese editions (`*.zh.md`), and the Chinese README links to them.
+
+  No behaviour changed. If you were reading the README for the timing column list or the
+  h2 rationale, it is in `docs/` now, with the same content.
+
+- Fixes a duplication introduced by the 2.1.1 edit, which had left everything from
+  `## Updating` to the end of the English README present **twice**.
+
 ## 2.1.1
 
 - Documentation only — no behaviour changed. The upgrade section now answers the
