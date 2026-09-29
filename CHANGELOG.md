@@ -4,6 +4,27 @@ Three-part versions. The panel's **检查更新** button compares the installed
 `package.json` with the one on `main`, so an entry here is worth a release only when
 something a user can see has changed.
 
+## 2.0.1
+
+- **The settings page is editable again.** The settings service only projects a plugin
+  whose `Config` has at least one field marked `.volatile()` — `volatileForm()` returns
+  `undefined` otherwise and the entry is dropped from the document the page reads, so
+  the page found no entry of its own and disabled every control. That was the whole
+  cause; earlier attempts at it (registration, bundle packaging, page policy) were all
+  measured and all wrong. The section-level fields are marked now, through the same
+  `@deepseek-ai/schemastery` the shipped plugins use.
+
+  Marking is not free: a volatile field validates into a live accessor
+  (`{ get, [Symbol(cosmokit.volatile.write)] }`) rather than a plain value, so reading
+  the section directly would have seen an object where it expects a boolean and quietly
+  stopped compressing. The section is unwrapped once before anything reads it, and
+  because the test fixture activates with the same validated config, the whole host
+  suite covers that path.
+
+- Volatile is only legal at a fixed path: schemastery rejects it inside the providers
+  dict, which is why the per-provider switches are edited through paths rather than
+  declared live.
+
 ## 2.0.0
 
 **Settings now live in the loader row's `config`. Read the second item before upgrading.**

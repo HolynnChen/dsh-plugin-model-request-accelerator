@@ -296,8 +296,8 @@ test("the schema keeps the section valid for dynamic provider routes", () => {
 	assert.equal(resolved.providers.gamma.enabled, false, "enabled defaults to off");
 	assert.equal(resolved.providers.gamma.minBytes, 64);
 	assert.deepEqual(Config({}).providers, {}, "an absent section resolves to no policies");
-	assert.equal(Config({}).timing, true, "the timing preference defaults to on");
-	assert.equal(Config({ timing: false }).timing, false);
+	assert.equal(Config({}).timing.get(), true, "the timing preference defaults to on (a volatile field reads through get())");
+	assert.equal(Config({ timing: false }).timing.get(), false);
 });
 
 //#region end-to-end timing
