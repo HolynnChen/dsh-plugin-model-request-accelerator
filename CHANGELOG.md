@@ -4,6 +4,35 @@ Three-part versions. The panel's **检查更新** button compares the installed
 `package.json` with the one on `main`, so an entry here is worth a release only when
 something a user can see has changed.
 
+## 2.1.0
+
+- **Upgrading from 1.7.x carries your settings across.** 1.7.x kept them in
+  `$DSH_HOME/settings.yaml`, keyed by this plugin's section id; 2.0 reads them from the
+  loader row's `config` instead. dsh's own migration moved every section *except this
+  one*, because it only imports sections whose plugin entry exposes a `Config` with a
+  volatile field — and 1.7.x's Host half registered none, having called
+  `settings.installSection`, which 0.2 removed. So an upgrade booted with every default,
+  the settings page had no row to write to, and saving anything failed with
+  `Configuration for "model-request-accelerator" is overridden by a home patch or
+  command-line overlay`. The installer now moves the stranded section into the row.
+  `scripts/migrate-legacy-settings.mjs` does the work; it is idempotent, it keeps only
+  the fields this version still declares, and **it never touches a row that already
+  carries settings** — the settings page writes that same block, so a stale file must
+  not win against a live edit. Run it by hand any time to see what it would do:
+
+  ```sh
+  node scripts/migrate-legacy-settings.mjs --profile web --dry-run
+  ```
+
+  It consults `settings.yaml`, then `settings.yaml.imported`, then any
+  `settings.yaml.bak-*`. The last leg matters: dsh renames the file rather than copying
+  it, so a rejected section usually survives in `.imported` — but nothing in dsh 0.2
+  writes a `.bak-<stamp>`, that naming is the local tooling's, and on the machine this
+  was written for the section was in the backup and nowhere else. A field the current
+  schema has dropped is dropped rather than guessing, a provider whose policy holds
+  nothing this version reads is reported rather than written as an empty object, and an
+  absent field stays absent so the schema's default still applies.
+
 ## 2.0.3
 
 - **HTTP/2 works again, and the tests that cover it pass.** The transport resolved

@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-model-request-accelerator",
-  "version": "2.0.3",
+  "version": "2.1.0",
   "description": "Gzip request-body compression, HTTP/2 transport, pre-transmission, and request timing breakdown for DeepSeek Harness model calls",
   "type": "module",
   "license": "MIT",
@@ -27,18 +27,19 @@
     }
   },
   "files": [
-    "lib/index.js",
-    "lib/compress.js",
-    "lib/timing.js",
-    "lib/prewarm.js",
-    "lib/transport.js",
-    "lib/ledger.js",
-    "lib/version.js",
-    "lib/client.js",
     "README.md",
     "README.zh.md",
-    "lib",
+    "cordis.patch.yml",
     "install.sh",
+    "lib",
+    "lib/client.js",
+    "lib/compress.js",
+    "lib/index.js",
+    "lib/ledger.js",
+    "lib/prewarm.js",
+    "lib/timing.js",
+    "lib/transport.js",
+    "lib/version.js",
     "scripts"
   ],
   "keywords": [
@@ -63,7 +64,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test test/host.test.mjs test/client.test.mjs test/timing.test.mjs test/prewarm.test.mjs test/transport.test.mjs test/version.test.mjs test/install.test.mjs"
+    "test": "node --test test/host.test.mjs test/client.test.mjs test/timing.test.mjs test/prewarm.test.mjs test/transport.test.mjs test/version.test.mjs test/install.test.mjs test/migrate.test.mjs"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.2",
@@ -74,7 +75,7 @@
     "@deepseek-ai/cordis": "^4.0.2"
   },
   "meta": {
-    "title": "\u6a21\u578b\u8bf7\u6c42\u52a0\u901f",
-    "description": "\u538b\u7f29\u8bf7\u6c42\u4f53\u3001\u9884\u4f20\u8f93\u5171\u4eab\u5386\u53f2\uff0c\u5e76\u5206\u89e3\u6bcf\u6b21\u8bf7\u6c42\u7684\u8017\u65f6\u3002"
+    "title": "模型请求加速",
+    "description": "压缩请求体、预传输共享历史，并分解每次请求的耗时。"
   }
 }

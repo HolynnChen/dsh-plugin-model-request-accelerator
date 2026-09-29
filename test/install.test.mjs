@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { parseDocument } from "yaml";
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -26,19 +27,34 @@ const PLUGIN_ID = "model-request-accelerator";
  * Run the installer twice against a throwaway profile, so a second run is proven
  * idempotent as well.
  * @param patch - the patch file to start from, or `undefined` for none.
+ * @param legacy - a 1.7.x settings section to leave behind as a timestamped backup.
  * @returns the resulting patch file's text, and the profile root to clean up.
  */
-function installTwice(patch) {
+function installTwice(patch, legacy) {
 	const home = mkdtempSync(join(tmpdir(), "dsh-install-"));
 	const profile = join(home, "profiles", "web");
 	mkdirSync(join(profile, "plugins"), { recursive: true });
 	writeFileSync(join(profile, "package.json"), '{ "name": "web" }\n');
 	if (patch !== undefined) writeFileSync(join(profile, "cordis.patch.yml"), patch);
+	if (legacy !== undefined) writeFileSync(join(home, "settings.yaml.bak-20260927-113734"), legacy);
 	execFileSync("git", ["clone", "--quiet", PACKAGE_ROOT, join(profile, "plugins", PLUGIN_ID)]);
 	for (let run = 0; run < 2; run += 1) {
 		execFileSync("sh", [join(PACKAGE_ROOT, "install.sh")], { env: { ...process.env, DSH_HOME: home }, encoding: "utf8" });
 	}
 	return { patch: readFileSync(join(profile, "cordis.patch.yml"), "utf8"), home };
+}
+
+/**
+ * The plugin row's `config`, as the installer left it.
+ * @param patch - the patch file's text.
+ * @returns the row's config object.
+ */
+function rowConfig(patch) {
+	const document = parseDocument(patch);
+	const row = document.contents.items
+		.flatMap((item) => (item.has("insert") ? item.get("insert").items : [item]))
+		.find((item) => item.get("id") === PLUGIN_ID);
+	return row.get("config")?.toJSON();
 }
 
 /**
@@ -81,5 +97,55 @@ test("appends to a patch layer that already has entries, and to empty or absent 
 		} finally {
 			rmSync(result.home, { recursive: true, force: true });
 		}
+	}
+});
+
+test("carries a 1.7.x install's settings into the row it registers", () => {
+	// The upgrade path, end to end: the row already exists (registered by an older
+	// release, in the form that release wrote) and the settings are stranded in a
+	// timestamped backup, because dsh's own migration only imports sections whose
+	// plugin registered a `Config` — which 1.7.x never did.
+	const legacy = `model-request-accelerator:
+  providers:
+    sg:
+      enabled: true
+      prewarm: true
+    codebuddy:
+      enabled: true
+      http2: false
+  encoding: gzip
+unrelated-section:
+  keep: me
+`;
+	const { patch, home } = installTwice(
+		`# a 1.7.x patch layer\n- insert:\n    - id: ${PLUGIN_ID}\n      name: './plugins/${PLUGIN_ID}/lib/index.js'\n`,
+		legacy
+	);
+	try {
+		const config = rowConfig(patch);
+		assert.ok(config !== undefined, "the row gained a config block");
+		assert.equal(config.providers.sg.enabled, true, "the switch the user had set is carried over");
+		assert.equal(config.providers.sg.prewarm, true);
+		assert.equal(config.providers.codebuddy.http2, false, "an explicit opt-out survives too");
+		assert.equal(config.encoding, "gzip");
+		assert.equal(topLevelEntries(patch).length, 1, "and the row is still registered exactly once after two runs");
+		assert.match(patch, /^# a 1\.7\.x patch layer$/mu, "the existing comments are kept");
+	} finally {
+		rmSync(home, { recursive: true, force: true });
+	}
+});
+
+test("never overwrites settings the settings page has already written", () => {
+	// Both the migration and the settings page write this same block, so a second
+	// install run must defer to what is there — otherwise re-installing would silently
+	// undo every change made in the UI.
+	const settled = `- insert:\n    - id: ${PLUGIN_ID}\n      name: './plugins/x/lib/index.js'\n      config:\n        providers:\n          sg:\n            enabled: false\n`;
+	const legacy = `model-request-accelerator:\n  providers:\n    sg:\n      enabled: true\n`;
+	const { patch, home } = installTwice(settled, legacy);
+	try {
+		const config = rowConfig(patch);
+		assert.equal(config.providers.sg.enabled, false, "the user's later choice wins over the stale file");
+	} finally {
+		rmSync(home, { recursive: true, force: true });
 	}
 });

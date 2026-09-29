@@ -4,8 +4,10 @@
 #   curl -fsSL https://raw.githubusercontent.com/HolynnChen/dsh-plugin-model-request-accelerator/main/install.sh | sh
 #
 # Clones the plugin next to the profile's other plugins and registers it in the
-# profile's patch layer. Safe to re-run: an existing checkout is fast-forwarded
-# and an already-registered entry is left alone.
+# profile's patch layer. Safe to re-run: an existing checkout is fast-forwarded,
+# an already-registered entry is left alone, and settings it has already migrated
+# (or you have since edited) are never overwritten. Upgrading from 1.7.x carries
+# your old settings across automatically — see scripts/migrate-legacy-settings.mjs.
 #
 # Environment overrides:
 #   DSH_HOME     DSH home directory       (default: $HOME/.dsh)
@@ -46,9 +48,14 @@ fi
 	printf '# Your patch layer for the %s profile.\n' "$DSH_PROFILE" >"$PATCH_FILE"
 }
 
-if grep -qE "^[[:space:]]*-[[:space:]]*id:[[:space:]]*(dsh-plugin-)?${PLUGIN_ID}[[:space:]]*\$" "$PATCH_FILE" 2>/dev/null; then
-	say "==> $PATCH_FILE already registers $PLUGIN_ID; leaving it as is"
-else
+# Register the plugin, unless it is already registered. Registration is separate from
+# configuration: this only guarantees the row exists, which is also what the migration
+# below needs in order to have somewhere to write.
+register_row() {
+	if grep -qE "^[[:space:]]*-[[:space:]]*id:[[:space:]]*(dsh-plugin-)?${PLUGIN_ID}[[:space:]]*\$" "$PATCH_FILE" 2>/dev/null; then
+		say "==> $PATCH_FILE already registers $PLUGIN_ID; leaving it as is"
+		return
+	fi
 	# A pristine patch layer is comments followed by an empty array. Appending a
 	# sequence entry after `[]` produces a file a YAML parser rejects — it reads one
 	# document that is both an empty array and a block sequence — so the empty array
@@ -68,6 +75,25 @@ else
 		printf "      name: '%s'\n" "$ROW_NAME"
 		printf '      config: {}\n'
 	} >>"$PATCH_FILE"
+}
+
+register_row
+
+# Carry settings over from a 1.7.x install. Those releases kept them in
+# $DSH_HOME/settings.yaml, keyed by the plugin's section id; 2.0 reads them from this
+# row's `config` instead, and dsh's own migration left this plugin's section behind
+# (it only imports sections whose plugin registered a `Config`, and 1.7.x registered
+# none). So an upgrade boots with every default and the settings page has no row to
+# write to. The migrator moves the stranded section into the row, and leaves a row that
+# already carries settings alone. Exit code 3 means there was nothing to migrate.
+if [ -f "$TARGET_DIR/scripts/migrate-legacy-settings.mjs" ]; then
+	migrated=0
+	node "$TARGET_DIR/scripts/migrate-legacy-settings.mjs" --as-command \
+		--dsh-home "$DSH_HOME" --profile "$DSH_PROFILE" --plugin-id "$PLUGIN_ID" || migrated=$?
+	if [ "$migrated" = "1" ]; then
+		say "==> could not migrate settings from an older version; your settings are unchanged,"
+		say "    and the settings page will show this plugin's defaults."
+	fi
 fi
 
 say ""

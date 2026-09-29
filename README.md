@@ -253,7 +253,8 @@ npm test
 - `test/prewarm.test.mjs` covers the prefix scanner and the field reordering against bodies of both shapes, including the ones that must be refused.
 - `test/transport.test.mjs` covers the h2 decision and its fallback with both injection points faked, so none of it needs a network: the TLS/opt-in rules, one Agent per origin, the refusal to cross two undici instances, a failure condemning an origin exactly once, an abort *not* condemning it, and the announced-but-failed connection that must not be reported as a protocol.
 - `test/version.test.mjs` covers three-part comparison, including the cases a string comparison gets wrong and the ones that must not be read as an update.
-- `test/install.test.mjs` runs the installer against throwaway profiles, twice each, from a pristine patch layer, one that already has entries, an empty file and no file at all — pinning the case where an empty array must be replaced rather than appended to.
+- `test/install.test.mjs` runs the installer against throwaway profiles, twice each, from a pristine patch layer, one that already has entries, an empty file and no file at all — pinning the case where an empty array must be replaced rather than appended to, and that an upgrade from 1.7.x gains its old settings exactly once.
+- `test/migrate.test.mjs` covers the migration: the section found in `.imported` and in a backup, a row that already carries settings left untouched, a malformed patch refused rather than half-written, an absent field staying absent so the schema's default still applies, and the stated provider field list failing the build when it drifts from the schema.
 
 ## Layout
 
@@ -268,6 +269,7 @@ npm test
 | `lib/transport.js` | The HTTP/2 transport: resolves one undici module instance, pairs its `fetch` with its own `allowH2` Agent, decides per request, and condemns an origin that failed. Optional by construction — with no undici resolvable, h2 is simply off. |
 | `lib/ledger.js` | The durable per-session store, built on the deployment's storage domain. |
 | `lib/version.js` | Three-part version parsing and comparison, which the update button reads. |
+| `scripts/migrate-legacy-settings.mjs` | Moves a 1.7.x `settings.yaml` section into the loader row this version reads. Idempotent, and never overwrites settings the page has written. |
 | `scripts/probe-encodings.mjs` | Asks an endpoint which request encodings it decodes, before there is traffic to learn from. |
 | `README.zh.md` | Chinese documentation. |
 
@@ -297,7 +299,20 @@ Release notes live in [CHANGELOG.md](./CHANGELOG.md).
 
 ## Updating
 
-The plugin carries a three-part version (`package.json`, currently `2.0.0`), and the settings card shows it with a button. **Opening the card checks by itself** and says so — a check that ran in the last five minutes is reused rather than repeated, and the button always asks afresh. **检查更新** asks the Host for the version published on the repository's `main` branch and compares the two; when the published one is newer the button becomes **更新到 X**.
+The plugin carries a three-part version (`package.json`, currently `2.1.0`), and the settings card shows it with a button. **Opening the card checks by itself** and says so — a check that ran in the last five minutes is reused rather than repeated, and the button always asks afresh. **检查更新** asks the Host for the version published on the repository's `main` branch and compares the two; when the published one is newer the button becomes **更新到 X**.
 
 The update itself is a fast-forward pull in the plugin's own directory — exactly what the installer does — run without a shell and with a timeout. A version that cannot be parsed on either side is never treated as newer, so a typo cannot offer a downgrade. **After an update the plugin still runs the old code until `dsh web` is restarted**; the card says so.
+
+### Upgrading from 1.7.x
+
+Your settings are carried across by the installer, or by this on its own:
+
+```sh
+node scripts/migrate-legacy-settings.mjs --profile web --dry-run   # show what it would write
+node scripts/migrate-legacy-settings.mjs --profile web             # write it
+```
+
+1.7.x kept them in `$DSH_HOME/settings.yaml`, keyed by this plugin's section id, and 2.0 reads them from the loader row's `config` instead. dsh migrates old sections itself, but only for a plugin entry that exposes a `Config` with a volatile field — and 1.7.x's Host half registered none, because it called `settings.installSection`, which 0.2 removed. So this plugin's section is the one dsh leaves behind, which is why an upgrade used to boot with every provider off, offer no row to configure, and refuse a save with `Configuration for "model-request-accelerator" is overridden by a home patch or command-line overlay`.
+
+The migrator reads the section from wherever it survived — `settings.yaml`, then `settings.yaml.imported` (where dsh renames it, and where a rejected section usually stays), then any `settings.yaml.bak-*` — and writes it into the plugin's row. It is safe to re-run: it does nothing once the row carries settings, and **it never overwrites a row the settings page has already written**, because both edit the same block. Fields the current version no longer declares are dropped rather than guessed at; a provider whose policy holds nothing this version reads is reported, not written as an empty object.
 

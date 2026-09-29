@@ -273,9 +273,22 @@ Release notes live in [CHANGELOG.md](./CHANGELOG.md).
 
 ## 更新
 
-插件带三段式版本号（`package.json`，当前 `2.0.0`），设置卡片里会显示它并附一个按钮。**打开卡片时会自动检查**，并把结果显示出来——五分钟内刚查过的结果会被复用而不是重复请求，而按钮始终会重新查一次。点 **检查更新** 会让 Host 去读取仓库 `main` 分支上发布的版本并比较；当远端更新时，按钮变成 **更新到 X**。
+插件带三段式版本号（`package.json`，当前 `2.1.0`），设置卡片里会显示它并附一个按钮。**打开卡片时会自动检查**，并把结果显示出来——五分钟内刚查过的结果会被复用而不是重复请求，而按钮始终会重新查一次。点 **检查更新** 会让 Host 去读取仓库 `main` 分支上发布的版本并比较；当远端更新时，按钮变成 **更新到 X**。
 
 更新动作就是在插件自己的目录里执行 fast-forward 拉取——和安装脚本做的事一样——不经 shell 且带超时。两侧只要有一侧版本号无法解析，就绝不视为「更新」，因此一个笔误不会造成降级。**更新之后，插件仍然运行旧代码，直到重启 `dsh web`**；卡片上会写明这一点。
+
+### 从 1.7.x 升级
+
+旧设置由安装脚本自动带过来，也可以单独跑：
+
+```sh
+node scripts/migrate-legacy-settings.mjs --profile web --dry-run   # 只显示会写成什么
+node scripts/migrate-legacy-settings.mjs --profile web             # 真正写入
+```
+
+1.7.x 把设置放在 `$DSH_HOME/settings.yaml` 的 `model-request-accelerator` 段里，2.0 改为从 loader 行的 `config` 读取。dsh 自己会迁移旧段，但**只针对那些暴露了带 volatile 字段的 `Config` 的插件条目**——而 1.7.x 的 Host half 一个都没注册（它调用的是 0.2 已删除的 `settings.installSection`）。于是本插件的段正是 dsh 留下的那一段：升级后会以「所有提供方都关着、设置页没有可写入口、保存时报 `Configuration for "model-request-accelerator" is overridden by a home patch or command-line overlay`」的形态启动。
+
+迁移脚本会在段还活着的地方把它读出来——先 `settings.yaml`，再 `settings.yaml.imported`（dsh 重命名的落点，被拒绝的段通常留在那里），最后是任何 `settings.yaml.bak-*`——然后写进插件所在的行。可以反复运行：一旦该行已有设置就什么也不做，并且**绝不覆盖设置页已经写入的那一行**，因为两者编辑的是同一块。当前版本已不再声明的字段会被丢弃而不是猜测，某个提供方的策略里如果没有任何本版本认识的字段，会被报告出来而不是写成一个空对象。
 
 ## 卸载
 
@@ -297,7 +310,9 @@ npm test
 - `test/timing.test.mjs`：用注入时钟驱动阶段运算，每个边界都精确到毫秒断言，含「某个阶段确实不存在」的情形。
 - `test/prewarm.test.mjs`：覆盖前缀扫描与字段重排，两种 body 形状都测，含必须被拒绝的那些情形。
 - `test/version.test.mjs`：覆盖三段式比较，含字符串比较会判错的情形，以及绝不能被当作「有更新」的情形。
-- `test/install.test.mjs`：让安装脚本在临时 profile 上各跑**两遍** ✓，分别从「原始空数组 ✓」「已有条目 ✓」「空文件 ✓」「文件不存在 ✓」四种状态出发 ✓ —— 专门钉住「空数组必须被替换、而不是被追加」这一点 ✓。
+- `test/transport.test.mjs`：h2 决策与降级的注入式测试（不需要网络）：TLS / 显式开关规则、每个 origin 一个 Agent、**拒绝交叉两个 undici 实例**、失败只记一次、取消**不**记、以及「已播报但随后失败」的连接绝不被当成用过的协议。
+- `test/install.test.mjs`：让安装脚本在临时 profile 上各跑**两遍**，分别从「原始空数组」「已有条目」「空文件」「文件不存在」四种状态出发 —— 专门钉住「空数组必须被替换、而不是被追加」这一点，以及「从 1.7.x 升级会且只会迁移一次旧设置」。
+- `test/migrate.test.mjs`：覆盖迁移本身：段出现在 `.imported` 与出现在备份两种情形、已有设置的行不被触碰、坏掉的 patch 被拒绝而不是写一半、缺失字段保持缺失以便 schema 默认值继续生效，以及「脚本里写死的提供方字段表一旦与 schema 脱节就让构建失败」。
 
 ## 结构
 
@@ -312,6 +327,7 @@ npm test
 | `lib/transport.js` | HTTP/2 传输层：解析出**同一个** undici 模块实例，把它的 `fetch` 与它自己的 `allowH2` Agent 成对使用，逐请求决策，并把失败的 origin 记下。**构造上是可选的**——解析不到 undici 时 h2 就是关的 |
 | `lib/ledger.js` | 按会话持久化的存储，建立在部署自身的 storage domain 之上 |
 | `lib/version.js` | 三段式版本号解析与比较，供更新按钮使用 |
+| `scripts/migrate-legacy-settings.mjs` | 把 1.7.x `settings.yaml` 里的段搬进本版本读取的 loader 行。幂等，且绝不覆盖设置页已写入的设置 |
 | `scripts/probe-encodings.mjs` | 在还没有流量可依据之前，问清某个 endpoint 接受哪些请求编码 |
 | `test/transport.test.mjs` | h2 决策与降级的单测：两个注入点都被替换，因此不需要网络。覆盖 TLS/显式开关规则、每个 origin 一个 Agent、**拒绝交叉两个 undici 实例**、失败只记一次、取消**不**记、以及「已播报但随后失败」的连接绝不被当成用过的协议 |
 | `README.md` | 英文文档 |
