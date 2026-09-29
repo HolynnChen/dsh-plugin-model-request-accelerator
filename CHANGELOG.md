@@ -4,7 +4,17 @@ Three-part versions. The panel's **检查更新** button compares the installed
 `package.json` with the one on `main`, so an entry here is worth a release only when
 something a user can see has changed.
 
-## 1.7.3
+## 1.7.4
+
+- **The settings page is a page in the settings list**, beside General, Models and
+  Plugins, rather than a tab inside the Plugins section. The registration in that tab
+  strip was live and active — the live slot tree showed it beside the shipped entry —
+  but the tab strip is where the inventory lives, and the page belongs with the other
+  pages. The seat is `settings.section`, whose entries become the settings panel's own
+  nav rows; the shell supplies no title there, so the page renders its own heading
+  again.
+- Both READMEs named Settings → Plugins, which was the placement for one release.
+
 
 - **The settings page is reachable again.** DSH 0.2.0-rc.2 rebuilt the Plugins
   settings section around tabs — one page per registered entry, keyed by an id the

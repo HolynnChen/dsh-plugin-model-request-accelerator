@@ -5,7 +5,7 @@
  * so it can be executed directly under Node with a stubbed loader and a stubbed
  * `react`. This pins the things that fail silently in the browser: the bundle id
  * agreeing with the package name the Host resolves, the card landing on the
- * `settings.plugins.tab` key the Plugins page dispatches, the card being
+ * `settings.section` key the Plugins page dispatches, the card being
  * collapsed until asked, and the timing view appearing only while its
  * preference is on.
  *
@@ -254,7 +254,7 @@ test("registers the card on the namespace key the Plugins page dispatches", () =
 
 	const harness = createClientContext();
 	exports.apply(harness.ctx);
-	const registration = harness.registrationFor("settings.plugins.tab");
+	const registration = harness.registrationFor("settings.section");
 	assert.equal(registration.options.id, NS, "the tab key must be an id of our own");
 	assert.equal(registration.options.label(), "模型请求加速", "and it supplies the tab label");
 	assert.equal(typeof registration.options.inject().ctl.read, "function");
@@ -264,7 +264,7 @@ test("renders as a page with its description and settings", async () => {
 	const { exports } = loadBundle();
 	const harness = createClientContext();
 	exports.apply(harness.ctx);
-	const card = harness.registrationFor("settings.plugins.tab");
+	const card = harness.registrationFor("settings.section");
 	const { ctl } = card.options.inject();
 
 	mount(card.component, { ctl });
@@ -285,7 +285,8 @@ test("renders as a page with its description and settings", async () => {
 		walk(node.children);
 	};
 	walk(page);
-	assert.ok(texts.includes("压缩请求体、预传输共享历史，并分解每次请求的耗时。"), "the description is on the page");
+	assert.ok(texts.includes("模型请求加速"), "the page carries its own heading");
+	assert.ok(texts.includes("压缩请求体、预传输共享历史，并分解每次请求的耗时。"), "and its description");
 	assert.ok(texts.includes("展示「请求耗时」面板"), "and so are the settings");
 });
 
@@ -293,7 +294,7 @@ test("the card offers the timing switch and writes it as a top-level field", asy
 	const { exports } = loadBundle();
 	const harness = createClientContext({ providers: {}, timing: false });
 	exports.apply(harness.ctx);
-	const card = harness.registrationFor("settings.plugins.tab");
+	const card = harness.registrationFor("settings.section");
 	const { ctl } = card.options.inject();
 
 	mount(card.component, { ctl });
@@ -329,18 +330,18 @@ test("reads the timing preference, defaulting to on when unset", async () => {
 	const { exports } = loadBundle();
 	const on = createClientContext({ providers: {} });
 	exports.apply(on.ctx);
-	assert.equal((await on.registrationFor("settings.plugins.tab").options.inject().ctl.read()).timing, true);
+	assert.equal((await on.registrationFor("settings.section").options.inject().ctl.read()).timing, true);
 
 	const off = createClientContext({ providers: {}, timing: false });
 	exports.apply(off.ctx);
-	assert.equal((await off.registrationFor("settings.plugins.tab").options.inject().ctl.read()).timing, false);
+	assert.equal((await off.registrationFor("settings.section").options.inject().ctl.read()).timing, false);
 });
 
 test("joins the provider directory with the stored policy and both profile shapes", async () => {
 	const { exports } = loadBundle();
 	const harness = createClientContext();
 	exports.apply(harness.ctx);
-	const { ctl } = harness.registrationFor("settings.plugins.tab").options.inject();
+	const { ctl } = harness.registrationFor("settings.section").options.inject();
 
 	const snapshot = await ctl.read();
 	assert.equal(snapshot.revision, 7);
@@ -359,25 +360,25 @@ test("offers HTTP/2 per route, defaulting to the pre-transmission rule", async (
 	// it off even while it pre-transmits; the section switch is a kill switch.
 	const inherited = createClientContext();
 	exports.apply(inherited.ctx);
-	const inheritedRoutes = (await inherited.registrationFor("settings.plugins.tab").options.inject().ctl.read()).routes;
+	const inheritedRoutes = (await inherited.registrationFor("settings.section").options.inject().ctl.read()).routes;
 	assert.equal(inheritedRoutes.find((route) => route.id === "beta").http2, true, "a pre-transmitting route gets h2 without asking");
 
 	const refused = createClientContext({ providers: { beta: { enabled: true, minBytes: 4096, prewarm: true, http2: false } } });
 	exports.apply(refused.ctx);
-	const refusedRoutes = (await refused.registrationFor("settings.plugins.tab").options.inject().ctl.read()).routes;
+	const refusedRoutes = (await refused.registrationFor("settings.section").options.inject().ctl.read()).routes;
 	assert.equal(refusedRoutes.find((route) => route.id === "beta").http2, false, "a route that turned it off keeps it off");
 
 	const killed = createClientContext({ http2: false, providers: { beta: { enabled: true, prewarm: true } } });
 	exports.apply(killed.ctx);
-	assert.equal((await killed.registrationFor("settings.plugins.tab").options.inject().ctl.read()).http2, false, "the section switch is read");
-	assert.equal((await killed.registrationFor("settings.plugins.tab").options.inject().ctl.read()).routes.find((route) => route.id === "beta").http2, false, "and it overrides the rule");
+	assert.equal((await killed.registrationFor("settings.section").options.inject().ctl.read()).http2, false, "the section switch is read");
+	assert.equal((await killed.registrationFor("settings.section").options.inject().ctl.read()).routes.find((route) => route.id === "beta").http2, false, "and it overrides the rule");
 });
 
 test("writes the pool size as a top-level field", async () => {
 	const { exports } = loadBundle();
 	const harness = createClientContext();
 	exports.apply(harness.ctx);
-	const { ctl } = harness.registrationFor("settings.plugins.tab").options.inject();
+	const { ctl } = harness.registrationFor("settings.section").options.inject();
 
 	await ctl.write("prewarmPoolSize", { value: 5 }, 7);
 	assert.deepEqual(harness.ctx.writes, [{ ns: NS, ops: [{ op: "set", path: ["prewarmPoolSize"], value: 5 }], revision: 7 }]);
@@ -387,7 +388,7 @@ test("writes path-addressed provider ops with the revision it read", async () =>
 	const { exports } = loadBundle();
 	const harness = createClientContext();
 	exports.apply(harness.ctx);
-	const { ctl } = harness.registrationFor("settings.plugins.tab").options.inject();
+	const { ctl } = harness.registrationFor("settings.section").options.inject();
 
 	await ctl.write("alpha", { enabled: true, minBytes: 2048, prewarm: true }, 7);
 	assert.deepEqual(harness.ctx.writes, [{
@@ -405,7 +406,7 @@ test("surfaces a refused write instead of reporting success", async () => {
 	const { exports } = loadBundle();
 	const harness = createClientContext();
 	exports.apply(harness.ctx);
-	const { ctl } = harness.registrationFor("settings.plugins.tab").options.inject();
+	const { ctl } = harness.registrationFor("settings.section").options.inject();
 	harness.ctx.remote.settings.mutate = async () => ({ ok: false, error: { message: "stale revision" } });
 	await assert.rejects(() => ctl.write("alpha", { enabled: true }, 3), /stale revision/u);
 });
@@ -422,7 +423,7 @@ test("registers the timing view while the preference is on", async () => {
 	assert.ok(view.options.order > 10, "it renders after the Trajectory, which registers at order 10");
 	assert.equal(view.options.label(), "请求耗时");
 	assert.equal(typeof view.options.inject().loadTimings, "function");
-	assert.equal(typeof harness.registrationFor("settings.plugins.tab").options.inject().ctl.subscribe, "function", "and it subscribes to its own writes");
+	assert.equal(typeof harness.registrationFor("settings.section").options.inject().ctl.subscribe, "function", "and it subscribes to its own writes");
 });
 
 test("does not register the view while the preference is off", async () => {
@@ -455,7 +456,7 @@ test("adds and removes the view as the preference changes", async () => {
 	const { exports } = loadBundle();
 	const harness = createClientContext({ providers: {}, timing: true });
 	exports.apply(harness.ctx);
-	const { ctl } = harness.registrationFor("settings.plugins.tab").options.inject();
+	const { ctl } = harness.registrationFor("settings.section").options.inject();
 	await flush();
 	assert.ok(harness.registrationFor("conversation.view") !== undefined);
 
@@ -786,7 +787,7 @@ test("holds the headings and every provider in one grid", async () => {
 	const { exports } = loadBundle();
 	const harness = createClientContext();
 	exports.apply(harness.ctx);
-	const card = harness.registrationFor("settings.plugins.tab");
+	const card = harness.registrationFor("settings.section");
 	const { ctl } = card.options.inject();
 	mount(card.component, { ctl });
 	await flush();
@@ -824,7 +825,7 @@ test("shows the ledger's size, and clears it only after a confirmation", async (
 	const { exports } = loadBundle();
 	const harness = createClientContext();
 	exports.apply(harness.ctx);
-	const card = harness.registrationFor("settings.plugins.tab");
+	const card = harness.registrationFor("settings.section");
 	const { ctl } = card.options.inject();
 
 	const calls = [];
@@ -911,7 +912,7 @@ test("keeps the plugin-level controls next to their labels", async () => {
 	const { exports } = loadBundle();
 	const harness = createClientContext();
 	exports.apply(harness.ctx);
-	const card = harness.registrationFor("settings.plugins.tab");
+	const card = harness.registrationFor("settings.section");
 	const { ctl } = card.options.inject();
 	mount(card.component, { ctl });
 	await flush();
@@ -942,7 +943,7 @@ test("offers the algorithm per provider, and writes it to that route", async () 
 	const { exports } = loadBundle();
 	const harness = createClientContext();
 	exports.apply(harness.ctx);
-	const card = harness.registrationFor("settings.plugins.tab");
+	const card = harness.registrationFor("settings.section");
 	const { ctl } = card.options.inject();
 
 	assert.equal((await ctl.read()).encoding, "auto", "the stored algorithm is read for the panel");
