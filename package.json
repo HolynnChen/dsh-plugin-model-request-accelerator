@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-model-request-accelerator",
-  "version": "1.7.4",
+  "version": "1.7.5",
   "description": "Gzip request-body compression, HTTP/2 transport, pre-transmission, and request timing breakdown for DeepSeek Harness model calls",
   "type": "module",
   "license": "MIT",

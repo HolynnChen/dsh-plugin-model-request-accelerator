@@ -4,6 +4,20 @@ Three-part versions. The panel's **检查更新** button compares the installed
 `package.json` with the one on `main`, so an entry here is worth a release only when
 something a user can see has changed.
 
+## 1.7.5
+
+- **The page's controls work again.** The Host keys a settings section by the profile
+  entry id — the loader row's id, which is `dsh-plugin-model-request-accelerator` for a
+  row named after the package and `model-request-accelerator` for one the installer
+  wrote. The client looked up one hardcoded key, found no entry, and rendered the page
+  as if settings were read-only: every provider switch off and disabled, the timing
+  panel unable to be enabled. It now finds its entry by id (exact, or suffixed with
+  the package prefix) and reads writability from that entry rather than from a
+  document-level flag this release does not set.
+- The provider list itself comes from the directory the Host reports, so
+  `deepseek-account` appearing there is the updated DSH registering a provider, not
+  this plugin inventing one.
+
 ## 1.7.4
 
 - **The settings page is a page in the settings list**, beside General, Models and

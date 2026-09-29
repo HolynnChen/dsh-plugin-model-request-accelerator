@@ -171,7 +171,7 @@ function createClientContext(sectionValue = { providers: { beta: { enabled: true
 							writable: true,
 							hasDocument: true,
 							namespaces: [
-								{ ns: NS, applies: "live", revision: 7, secrets: [], value: section },
+								{ ns: `dsh-plugin-${NS}`, applies: "live", revision: 7, secrets: [], value: section },
 								{ ns: "llm-alpha", applies: "live", revision: 1, secrets: [], value: { baseURL: SITE } },
 								{ ns: "llm-beta", applies: "live", revision: 1, secrets: [], value: { providers: { beta: { baseURL: SITE } } } }
 							]
@@ -323,7 +323,7 @@ test("the card offers the timing switch and writes it as a top-level field", asy
 	assert.equal(checkbox.props.checked, false, "it reflects the stored section");
 
 	await checkbox.props.onChange({ target: { checked: true } });
-	assert.deepEqual(harness.ctx.writes, [{ ns: NS, ops: [{ op: "set", path: ["timing"], value: true }], revision: 7 }]);
+	assert.deepEqual(harness.ctx.writes, [{ ns: `dsh-plugin-${NS}`, ops: [{ op: "set", path: ["timing"], value: true }], revision: 7 }]);
 });
 
 test("reads the timing preference, defaulting to on when unset", async () => {
@@ -380,8 +380,8 @@ test("writes the pool size as a top-level field", async () => {
 	exports.apply(harness.ctx);
 	const { ctl } = harness.registrationFor("settings.section").options.inject();
 
-	await ctl.write("prewarmPoolSize", { value: 5 }, 7);
-	assert.deepEqual(harness.ctx.writes, [{ ns: NS, ops: [{ op: "set", path: ["prewarmPoolSize"], value: 5 }], revision: 7 }]);
+	await ctl.write(`dsh-plugin-${NS}`, "prewarmPoolSize", { value: 5 }, 7);
+	assert.deepEqual(harness.ctx.writes, [{ ns: `dsh-plugin-${NS}`, ops: [{ op: "set", path: ["prewarmPoolSize"], value: 5 }], revision: 7 }]);
 });
 
 test("writes path-addressed provider ops with the revision it read", async () => {
@@ -390,9 +390,9 @@ test("writes path-addressed provider ops with the revision it read", async () =>
 	exports.apply(harness.ctx);
 	const { ctl } = harness.registrationFor("settings.section").options.inject();
 
-	await ctl.write("alpha", { enabled: true, minBytes: 2048, prewarm: true }, 7);
+	await ctl.write(`dsh-plugin-${NS}`, "alpha", { enabled: true, minBytes: 2048, prewarm: true }, 7);
 	assert.deepEqual(harness.ctx.writes, [{
-		ns: NS,
+		ns: `dsh-plugin-${NS}`,
 		ops: [
 			{ op: "set", path: ["providers", "alpha", "enabled"], value: true },
 			{ op: "set", path: ["providers", "alpha", "minBytes"], value: 2048 },
@@ -408,7 +408,7 @@ test("surfaces a refused write instead of reporting success", async () => {
 	exports.apply(harness.ctx);
 	const { ctl } = harness.registrationFor("settings.section").options.inject();
 	harness.ctx.remote.settings.mutate = async () => ({ ok: false, error: { message: "stale revision" } });
-	await assert.rejects(() => ctl.write("alpha", { enabled: true }, 3), /stale revision/u);
+	await assert.rejects(() => ctl.write(`dsh-plugin-${NS}`, "alpha", { enabled: true }, 3), /stale revision/u);
 });
 
 test("registers the timing view while the preference is on", async () => {
@@ -461,11 +461,11 @@ test("adds and removes the view as the preference changes", async () => {
 	assert.ok(harness.registrationFor("conversation.view") !== undefined);
 
 	// The plugin is the only writer of its namespace, so its own write is the signal.
-	await ctl.write("timing", { enabled: false }, 7);
+	await ctl.write(`dsh-plugin-${NS}`, "timing", { enabled: false }, 7);
 	await flush();
 	assert.equal(harness.registrationFor("conversation.view"), undefined, "switching off removes the tab");
 
-	await ctl.write("timing", { enabled: true }, 7);
+	await ctl.write(`dsh-plugin-${NS}`, "timing", { enabled: true }, 7);
 	await flush();
 	assert.ok(harness.registrationFor("conversation.view") !== undefined, "switching back on restores it");
 });
@@ -971,7 +971,7 @@ test("offers the algorithm per provider, and writes it to that route", async () 
 	await select.props.onChange({ target: { value: "gzip" } });
 	await flush();
 	assert.deepEqual(harness.ctx.writes, [{
-		ns: NS,
+		ns: `dsh-plugin-${NS}`,
 		ops: [{ op: "set", path: ["providers", "alpha", "encoding"], value: "gzip" }],
 		revision: 7
 	}], "the choice is path-addressed to the route, not the section");
