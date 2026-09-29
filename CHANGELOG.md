@@ -4,6 +4,17 @@ Three-part versions. The panel's **检查更新** button compares the installed
 `package.json` with the one on `main`, so an entry here is worth a release only when
 something a user can see has changed.
 
+## 1.7.6
+
+- **The settings entry is matched wherever its name sits in the id.** The live entry
+  here is `include:dsh-plugin-model-request-accelerator` — the composed id carries the
+  include and the package prefix — and the previous lookup matched only an exact id or
+  a `-`-suffixed one. It now matches on the name as a substring, which covers every
+  prefix shape, and the client tests use this profile's composed id so the matching is
+  what they exercise.
+- When nothing matches, the client says so on the console and lists the ids it was
+  offered. A wrong id is then a message rather than a page of dead controls.
+
 ## 1.7.5
 
 - **The page's controls work again.** The Host keys a settings section by the profile
