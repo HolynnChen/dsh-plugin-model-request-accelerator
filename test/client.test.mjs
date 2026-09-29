@@ -159,8 +159,7 @@ function loadBundle() {
 /** A fake client context recording slot registrations, plus a controllable settings scope. */
 function createClientContext(sectionValue = { providers: { beta: { enabled: true, minBytes: 4096, prewarm: true } }, timing: true, prewarmPoolSize: 3, encoding: "auto" }) {
 	const harness = { registrations: [] };
-	const listeners = new Set();
-	let snapshot = { status: "ready", value: sectionValue, writable: true, revision: 7 };
+	let section = sectionValue;
 
 	const ctx = {
 		remote: {
@@ -172,7 +171,7 @@ function createClientContext(sectionValue = { providers: { beta: { enabled: true
 							writable: true,
 							hasDocument: true,
 							namespaces: [
-								{ ns: NS, applies: "live", revision: 7, secrets: [], value: sectionValue },
+								{ ns: NS, applies: "live", revision: 7, secrets: [], value: section },
 								{ ns: "llm-alpha", applies: "live", revision: 1, secrets: [], value: { baseURL: SITE } },
 								{ ns: "llm-beta", applies: "live", revision: 1, secrets: [], value: { providers: { beta: { baseURL: SITE } } } }
 							]
@@ -181,6 +180,17 @@ function createClientContext(sectionValue = { providers: { beta: { enabled: true
 				},
 				async mutate(ns, ops, revision) {
 					ctx.writes.push({ ns, ops, revision });
+					// Apply the ops to the described document, so a re-read sees the change
+					// exactly as the Host would report it.
+					for (const op of ops) {
+						if (op.op !== "set" || !Array.isArray(op.path)) continue;
+						let node = section;
+						for (const step of op.path.slice(0, -1)) {
+							if (node[step] === null || typeof node[step] !== "object") node[step] = {};
+							node = node[step];
+						}
+						node[op.path.at(-1)] = op.value;
+					}
 					return { ok: true, value: { ns, revision: revision + 1 } };
 				}
 			},
@@ -224,24 +234,10 @@ function createClientContext(sectionValue = { providers: { beta: { enabled: true
 		}
 	};
 
-	ctx.settingsScope = {
-		bind() {
-			return {
-				getSnapshot: () => snapshot,
-				subscribe: (listener) => {
-					listeners.add(listener);
-					return () => listeners.delete(listener);
-				}
-			};
-		}
+	/** Replace the document a read would describe, for tests that start undecided. */
+	harness.setDescribe = (next) => {
+		ctx.remote.settings.describe = next;
 	};
-
-	/** Replace the section the scope reports, and notify subscribers. */
-	harness.publish = (next) => {
-		snapshot = { ...snapshot, ...next };
-		for (const listener of [...listeners]) listener();
-	};
-	harness.listenerCount = () => listeners.size;
 	harness.registrationFor = (name) => harness.registrations.find((entry) => entry.options.name === name);
 	return Object.assign(harness, { ctx });
 }
@@ -254,7 +250,7 @@ test("the bundle id matches the package name the Host resolves", () => {
 test("registers the card on the namespace key the Plugins page dispatches", () => {
 	const { exports } = loadBundle();
 	assert.equal(typeof exports.apply, "function");
-	assert.deepEqual([...exports.inject], ["slots", "remote", "remote.settings", "remote.llm", "settingsScope"]);
+	assert.deepEqual([...exports.inject], ["slots", "remote", "remote.settings", "remote.llm"], "no service this runtime does not provide");
 
 	const harness = createClientContext();
 	exports.apply(harness.ctx);
@@ -409,10 +405,11 @@ test("surfaces a refused write instead of reporting success", async () => {
 	await assert.rejects(() => ctl.write("alpha", { enabled: true }, 3), /stale revision/u);
 });
 
-test("registers the timing view while the preference is on", () => {
+test("registers the timing view while the preference is on", async () => {
 	const { exports } = loadBundle();
 	const harness = createClientContext({ providers: {}, timing: true });
 	exports.apply(harness.ctx);
+	await flush();
 
 	const view = harness.registrationFor("conversation.view");
 	assert.ok(view !== undefined, "the view is registered");
@@ -420,48 +417,50 @@ test("registers the timing view while the preference is on", () => {
 	assert.ok(view.options.order > 10, "it renders after the Trajectory, which registers at order 10");
 	assert.equal(view.options.label(), "请求耗时");
 	assert.equal(typeof view.options.inject().loadTimings, "function");
-	assert.equal(harness.listenerCount(), 1, "the plugin observes the settings scope");
+	assert.equal(typeof harness.registrationFor("settings.plugin.item").options.inject().ctl.subscribe, "function", "and it subscribes to its own writes");
 });
 
-test("does not register the view while the preference is off", () => {
+test("does not register the view while the preference is off", async () => {
 	const { exports } = loadBundle();
 	const harness = createClientContext({ providers: {}, timing: false });
 	exports.apply(harness.ctx);
+	await flush();
 	assert.equal(harness.registrationFor("conversation.view"), undefined);
 });
 
-test("waits for the first section, so a disabled view never flashes", () => {
-	const { exports } = loadBundle();
-	const pending = createClientContext({ providers: {} });
-	pending.ctx.settingsScope.bind = () => ({
-		getSnapshot: () => ({ status: "loading", value: undefined, writable: false, revision: undefined }),
-		subscribe: () => () => {}
-	});
-	exports.apply(pending.ctx);
-	assert.equal(pending.registrationFor("conversation.view"), undefined, "no tab until the section is known");
-});
-
-test("still offers the view when settings are unavailable", () => {
+test("waits for the first read, so a disabled view never flashes", async () => {
 	const { exports } = loadBundle();
 	const harness = createClientContext({ providers: {} });
-	harness.ctx.settingsScope.bind = () => ({
-		getSnapshot: () => ({ status: "unavailable", value: undefined, writable: false, revision: undefined }),
-		subscribe: () => () => {}
-	});
+	harness.ctx.remote.settings.describe = () => new Promise(() => {});
 	exports.apply(harness.ctx);
+	await flush();
+	assert.equal(harness.registrationFor("conversation.view"), undefined, "no tab until the preference is known");
+});
+
+test("still offers the view when settings cannot be read", async () => {
+	const { exports } = loadBundle();
+	const harness = createClientContext({ providers: {} });
+	harness.ctx.remote.settings.describe = async () => ({ ok: false, error: { message: "unavailable" } });
+	exports.apply(harness.ctx);
+	await flush();
 	assert.ok(harness.registrationFor("conversation.view") !== undefined, "the default is on");
 });
 
-test("adds and removes the view as the preference changes", () => {
+test("adds and removes the view as the preference changes", async () => {
 	const { exports } = loadBundle();
 	const harness = createClientContext({ providers: {}, timing: true });
 	exports.apply(harness.ctx);
+	const { ctl } = harness.registrationFor("settings.plugin.item").options.inject();
+	await flush();
 	assert.ok(harness.registrationFor("conversation.view") !== undefined);
 
-	harness.publish({ value: { providers: {}, timing: false } });
+	// The plugin is the only writer of its namespace, so its own write is the signal.
+	await ctl.write("timing", { enabled: false }, 7);
+	await flush();
 	assert.equal(harness.registrationFor("conversation.view"), undefined, "switching off removes the tab");
 
-	harness.publish({ value: { providers: {}, timing: true } });
+	await ctl.write("timing", { enabled: true }, 7);
+	await flush();
 	assert.ok(harness.registrationFor("conversation.view") !== undefined, "switching back on restores it");
 });
 
@@ -469,6 +468,7 @@ test("reads the timing ledger over the same-origin API route", async () => {
 	const { exports } = loadBundle();
 	const harness = createClientContext();
 	exports.apply(harness.ctx);
+	await flush();
 	const { loadTimings } = harness.registrationFor("conversation.view").options.inject();
 
 	const calls = [];
@@ -489,6 +489,7 @@ test("surfaces an unavailable ledger instead of reporting it empty", async () =>
 	const { exports } = loadBundle();
 	const harness = createClientContext();
 	exports.apply(harness.ctx);
+	await flush();
 	const { loadTimings } = harness.registrationFor("conversation.view").options.inject();
 
 	const realFetch = globalThis.fetch;
@@ -504,6 +505,7 @@ test("tolerates a ledger answer that carries no measurements", async () => {
 	const { exports } = loadBundle();
 	const harness = createClientContext();
 	exports.apply(harness.ctx);
+	await flush();
 	const { loadTimings } = harness.registrationFor("conversation.view").options.inject();
 
 	const realFetch = globalThis.fetch;
@@ -552,6 +554,8 @@ test("renders the timing columns, the sizes and the compression delta", async ()
 	const { exports } = loadBundle();
 	const harness = createClientContext();
 	exports.apply(harness.ctx);
+
+	await flush();
 	const view = harness.registrationFor("conversation.view");
 	const injected = view.options.inject();
 	const measurements = [measurement()];
@@ -602,6 +606,8 @@ test("takes the shell's column-width handles out of the layout while mounted", a
 		const { exports } = loadBundle();
 		const harness = createClientContext();
 		exports.apply(harness.ctx);
+
+		await flush();
 		const view = harness.registrationFor("conversation.view");
 		const props = { ...view.options.inject(), sessionId: "s1", loadTimings: async () => [] };
 		withoutTimers(() => mount(view.component, props));
@@ -624,6 +630,8 @@ test("bounds the panel to one screen, so there is no second scrollbar", async ()
 		const { exports } = loadBundle();
 		const harness = createClientContext();
 		exports.apply(harness.ctx);
+
+		await flush();
 		const view = harness.registrationFor("conversation.view");
 		const props = { ...view.options.inject(), sessionId: "s1", loadTimings: async () => [measurement()] };
 		withoutTimers(() => mount(view.component, props));
@@ -654,10 +662,12 @@ test("bounds the panel to one screen, so there is no second scrollbar", async ()
 	}
 });
 
-test("starts at the top when the view is opened", () => {
+test("starts at the top when the view is opened", async () => {
 	const { exports } = loadBundle();
 	const harness = createClientContext();
 	exports.apply(harness.ctx);
+
+	await flush();
 	const view = harness.registrationFor("conversation.view");
 	const props = { ...view.options.inject(), sessionId: "s1", loadTimings: async () => [] };
 	scrollCalls.length = 0;
@@ -672,6 +682,8 @@ test("fills the panel by proportional column shares instead of by content", asyn
 	const { exports } = loadBundle();
 	const harness = createClientContext();
 	exports.apply(harness.ctx);
+
+	await flush();
 	const view = harness.registrationFor("conversation.view");
 	const props = { ...view.options.inject(), sessionId: "s1", loadTimings: async () => [measurement()] };
 	withoutTimers(() => mount(view.component, props));
@@ -704,6 +716,8 @@ test("marks a row that had a pool but could not use it", async () => {
 	const { exports } = loadBundle();
 	const harness = createClientContext();
 	exports.apply(harness.ctx);
+
+	await flush();
 	const view = harness.registrationFor("conversation.view");
 	const props = {
 		...view.options.inject(),
@@ -734,6 +748,8 @@ test("shows a dash, not 0B, when a response was never attributed", async () => {
 	const { exports } = loadBundle();
 	const harness = createClientContext();
 	exports.apply(harness.ctx);
+
+	await flush();
 	const view = harness.registrationFor("conversation.view");
 	const props = {
 		...view.options.inject(),

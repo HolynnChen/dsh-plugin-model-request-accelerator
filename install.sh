@@ -46,7 +46,7 @@ fi
 	printf '# Your patch layer for the %s profile.\n' "$DSH_PROFILE" >"$PATCH_FILE"
 }
 
-if grep -qE "^[[:space:]]*-[[:space:]]*id:[[:space:]]*${PLUGIN_ID}[[:space:]]*\$" "$PATCH_FILE" 2>/dev/null; then
+if grep -qE "^[[:space:]]*-[[:space:]]*id:[[:space:]]*(dsh-plugin-)?${PLUGIN_ID}[[:space:]]*\$" "$PATCH_FILE" 2>/dev/null; then
 	say "==> $PATCH_FILE already registers $PLUGIN_ID; leaving it as is"
 else
 	# A pristine patch layer is comments followed by an empty array. Appending a

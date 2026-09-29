@@ -4,6 +4,17 @@ Three-part versions. The panel's **检查更新** button compares the installed
 `package.json` with the one on `main`, so an entry here is worth a release only when
 something a user can see has changed.
 
+## 1.7.2
+
+- **Works with DSH 0.2.0-rc.2 again.** The client half injected a `settingsScope`
+  service, which that release no longer provides, so its fiber stayed `pending`
+  forever and the browser boot failed with "1 entry did not activate" — taking the
+  whole page down, not just this plugin's card. The client half now injects only the
+  four services that exist, and drives its view's visibility from a read of its own
+  namespace plus a signal from its own writes, which is the only writer there is.
+- The installer also recognises a row whose id carries the `dsh-plugin-` package
+  prefix, so re-running it cannot add a second row for the same plugin.
+
 ## 1.7.1
 
 Six defects the 1.7.0 release carried, all found by looking at a real session's
