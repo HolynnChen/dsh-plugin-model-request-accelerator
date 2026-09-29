@@ -4,7 +4,19 @@ Three-part versions. The panel's **检查更新** button compares the installed
 `package.json` with the one on `main`, so an entry here is worth a release only when
 something a user can see has changed.
 
-## 1.7.2
+## 1.7.3
+
+- **The settings page is reachable again.** DSH 0.2.0-rc.2 rebuilt the Plugins
+  settings section around tabs — one page per registered entry, keyed by an id the
+  registrant chooses — and removed the per-plugin collapsible card slot this plugin
+  registered into. That registration went nowhere, so the plugin was installed,
+  running and simply absent from the interface. It now registers a page in
+  `settings.plugins.tab`, beside the shipped entries, and the disclosure machinery the
+  old card carried is gone with the card. The Request timing view is unaffected:
+  `conversation.view` still exists with the same registration options.
+- Both READMEs said the card lived in Settings → Plugins → Configuration, which no
+  longer names anything.
+
 
 - **Works with DSH 0.2.0-rc.2 again.** The client half injected a `settingsScope`
   service, which that release no longer provides, so its fiber stayed `pending`

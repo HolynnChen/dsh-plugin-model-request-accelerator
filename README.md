@@ -90,7 +90,7 @@ It clones the plugin into `$DSH_HOME/profiles/web/plugins/model-request-accelera
 `cordis.patch.yml`, leaving an already-registered entry alone, and replacing the empty array a pristine patch layer still consists of — appending after `[]` would produce a file YAML rejects. Safe to re-run. Target another profile with
 `DSH_HOME=... DSH_PROFILE=... sh`.
 
-Then **reload the browser tab** and open **Settings → Plugins → Configuration**.
+Then **reload the browser tab** and open **Settings → Plugins**.
 
 ### Manual install
 
@@ -123,13 +123,13 @@ The `name` resolves relative to the profile directory, so a relative path keeps 
 
 The `web` profile sets `patchReload: live`, so DSH watches `cordis.patch.yml` and re-composes the tree without a restart. **Reload the browser tab** — the client module graph is injected at page load, so an already-open page will not have the card.
 
-Then open **Settings → Plugins → Configuration** and look for **模型请求加速**.
+Then open **Settings → Plugins** and pick the **模型请求加速** tab.
 
 > **Updating an installed copy.** `patchReload: live` watches `cordis.patch.yml`, *not* plugin sources, so an edited Host half is only picked up by restarting `dsh web`. The browser bundle is different: it is re-read from disk, so a page reload is enough for the client half. Do both when in doubt.
 
 ## Configure
 
-The card lives in **Settings → Plugins → Configuration**, collapsed like every other plugin card on that page. Expand it to see:
+The page lives in **Settings → Plugins**, as a tab of its own beside the shipped ones. It shows:
 
 **The plugin switch**
 
@@ -296,7 +296,7 @@ Release notes live in [CHANGELOG.md](./CHANGELOG.md).
 
 ## Updating
 
-The plugin carries a three-part version (`package.json`, currently `1.7.2`), and the settings card shows it with a button. **Opening the card checks by itself** and says so — a check that ran in the last five minutes is reused rather than repeated, and the button always asks afresh. **检查更新** asks the Host for the version published on the repository's `main` branch and compares the two; when the published one is newer the button becomes **更新到 X**.
+The plugin carries a three-part version (`package.json`, currently `1.7.3`), and the settings card shows it with a button. **Opening the card checks by itself** and says so — a check that ran in the last five minutes is reused rather than repeated, and the button always asks afresh. **检查更新** asks the Host for the version published on the repository's `main` branch and compares the two; when the published one is newer the button becomes **更新到 X**.
 
 The update itself is a fast-forward pull in the plugin's own directory — exactly what the installer does — run without a shell and with a timeout. A version that cannot be parsed on either side is never treated as newer, so a typo cannot offer a downgrade. **After an update the plugin still runs the old code until `dsh web` is restarted**; the card says so.
 
