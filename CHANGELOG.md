@@ -4,6 +4,17 @@ Three-part versions. The panel's **检查更新** button compares the installed
 `package.json` with the one on `main`, so an entry here is worth a release only when
 something a user can see has changed.
 
+## 2.0.2
+
+- **The per-provider switches can be written.** With the section projected, saving one
+  was refused with `Config field "providers.sg.enabled" is not volatile`: only volatile
+  fields are writable, and schemastery rejects the marker on a field inside a dict —
+  its path is a wildcard. The **dict itself** is at a fixed path, so `providers` is
+  marked volatile now, which makes every path beneath it writable. That was the marking
+  I had removed a release ago as the safer choice, and it was the one that mattered.
+- The section unwrap already handles it: the dict validates into the same accessor
+  shape as any volatile field, and the whole host suite activates with that shape.
+
 ## 2.0.1
 
 - **The settings page is editable again.** The settings service only projects a plugin

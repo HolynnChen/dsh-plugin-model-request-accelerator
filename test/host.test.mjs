@@ -290,14 +290,17 @@ test("restores the original fetch when the plugin is disposed", async () => {
 });
 
 test("the schema keeps the section valid for dynamic provider routes", () => {
+	// A volatile field reads through get(); the plugin unwraps the section before it
+	// reads anything, so these assertions go through the same door.
+	const live = (value) => (value !== null && typeof value === "object" && typeof value.get === "function" ? value.get() : value);
 	const resolved = Config({ providers: { beta: { enabled: true }, gamma: { minBytes: 64 } } });
-	assert.equal(resolved.providers.beta.enabled, true);
-	assert.equal(resolved.providers.beta.minBytes, 1024, "minBytes default applies per route");
-	assert.equal(resolved.providers.gamma.enabled, false, "enabled defaults to off");
-	assert.equal(resolved.providers.gamma.minBytes, 64);
-	assert.deepEqual(Config({}).providers, {}, "an absent section resolves to no policies");
-	assert.equal(Config({}).timing.get(), true, "the timing preference defaults to on (a volatile field reads through get())");
-	assert.equal(Config({ timing: false }).timing.get(), false);
+	assert.equal(live(resolved.providers).beta.enabled, true);
+	assert.equal(live(resolved.providers).beta.minBytes, 1024, "minBytes default applies per route");
+	assert.equal(live(resolved.providers).gamma.enabled, false, "enabled defaults to off");
+	assert.equal(live(resolved.providers).gamma.minBytes, 64);
+	assert.deepEqual(live(Config({}).providers), {}, "an absent section resolves to no policies");
+	assert.equal(live(Config({}).timing), true, "the timing preference defaults to on (a volatile field reads through get())");
+	assert.equal(live(Config({ timing: false }).timing), false);
 });
 
 //#region end-to-end timing
