@@ -288,7 +288,7 @@ node scripts/migrate-legacy-settings.mjs --profile web             # 真正写�
 
 1.7.x 把设置放在 `$DSH_HOME/settings.yaml` 的 `model-request-accelerator` 段里，2.0 改为从 loader 行的 `config` 读取。dsh 自己会迁移旧段，但**只针对那些暴露了带 volatile 字段的 `Config` 的插件条目**——而 1.7.x 的 Host half 一个都没注册（它调用的是 0.2 已删除的 `settings.installSection`）。于是本插件的段正是 dsh 留下的那一段：升级后会以「所有提供方都关着、设置页没有可写入口、保存时报 `Configuration for "model-request-accelerator" is overridden by a home patch or command-line overlay`」的形态启动。
 
-迁移脚本会在段还活着的地方把它读出来——先 `settings.yaml`，再 `settings.yaml.imported`（dsh 重命名的落点，被拒绝的段通常留在那里），最后是任何 `settings.yaml.bak-*`——然后写进插件所在的行。可以反复运行：一旦该行已有设置就什么也不做，并且**绝不覆盖设置页已经写入的那一行**，因为两者编辑的是同一块。当前版本已不再声明的字段会被丢弃而不是猜测，某个提供方的策略里如果没有任何本版本认识的字段，会被报告出来而不是写成一个空对象。
+迁移脚本会在段还活着的地方把它读出来——先 `settings.yaml`，再 `settings.yaml.imported`（dsh 重命名的落点，被拒绝的段就留在那里），最后是任何 `settings.yaml.bak-*`——然后写进插件所在的行。最后这一路之所以存在，是因为 `.imported` 只是一个普通文件：改掉或删掉都很容易，而一旦如此，备份就成了唯一的副本。可以反复运行：一旦该行已有设置就什么也不做，并且**绝不覆盖设置页已经写入的那一行**，因为两者编辑的是同一块。当前版本已不再声明的字段会被丢弃而不是猜测，某个提供方的策略里如果没有任何本版本认识的字段，会被报告出来而不是写成一个空对象。
 
 ## 卸载
 

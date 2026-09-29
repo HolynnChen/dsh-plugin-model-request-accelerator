@@ -6,12 +6,12 @@
  * volatile field. A section that is rejected is logged and stays in the renamed file —
  * so `.imported` is normally where a stranded section is found.
  *
- * It is not the only place it can be. On the install this was written from, the section
- * was already absent from the file that got renamed and survived only in a timestamped
- * backup, and nothing in dsh 0.2 writes a `.bak-<stamp>` (it is the local tooling's
- * convention), so that leg is best-effort by nature. The migrator therefore consults a
- * list rather than assuming one source, and the tests cover both spellings: the section
- * in `.imported`, and the section only in a backup.
+ * A backup is the other way it turns up, and it is a real one rather than a curiosity:
+ * `.imported` is an ordinary file that a user can edit or delete, so the section can be
+ * gone from it by the time anyone looks — which is what happened on the install this
+ * was written from. Nothing in dsh 0.2 writes a `.bak-<stamp>` name, so that leg is
+ * best-effort by nature. The migrator consults a list rather than assuming one source,
+ * and both spellings are covered below.
  *
  * The second property is that it must never overwrite settings the settings page
  * could have written: both write the same block, and a stale file must not win
@@ -98,7 +98,7 @@ function readBack(profile) {
 	return { text, config: found?.row.get("config")?.toJSON() };
 }
 
-test("migrates the section out of a timestamped backup, where the upgrade actually leaves it", async () => {
+test("migrates the section out of a timestamped backup, when that is the only copy left", async () => {
 	const { root, profile } = home({ backup: LEGACY_SECTION, imported: "ui-onboarding:\n  welcomeNoticeVersion: 1\n" });
 	try {
 		const result = await migrate({ dshHome: root, profile: "web", pluginId: PLUGIN_ID, dryRun: false });

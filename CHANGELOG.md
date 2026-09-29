@@ -4,6 +4,17 @@ Three-part versions. The panel's **检查更新** button compares the installed
 `package.json` with the one on `main`, so an entry here is worth a release only when
 something a user can see has changed.
 
+## 2.1.1
+
+- Documentation only — no behaviour changed. The 2.1.0 entry described the backup file
+  as the usual place the stranded section is found, and reasoned from a copy where that
+  was true. It is not the usual place: dsh names `.imported` as where a rejected section
+  stays, and that is normally where it is. The backups are consulted because
+  `.imported` is an ordinary file that a user can edit or delete, and losing the section
+  from it leaves a backup as the only copy — which is a real way to arrive at this, not
+  a curiosity. The code was already right in both cases; the comments and the README
+  now say what is actually true.
+
 ## 2.1.0
 
 - **Upgrading from 1.7.x carries your settings across.** 1.7.x kept them in
@@ -25,10 +36,11 @@ something a user can see has changed.
   ```
 
   It consults `settings.yaml`, then `settings.yaml.imported`, then any
-  `settings.yaml.bak-*`. The last leg matters: dsh renames the file rather than copying
-  it, so a rejected section usually survives in `.imported` — but nothing in dsh 0.2
-  writes a `.bak-<stamp>`, that naming is the local tooling's, and on the machine this
-  was written for the section was in the backup and nowhere else. A field the current
+  `settings.yaml.bak-*`. dsh renames the file rather than copying it, so a section the
+  import rejects stays in `.imported` and that is normally where it is found; the
+  backups are the tail, because `.imported` is an ordinary file a user can edit or
+  delete, and losing the section from it leaves the backup as the only copy. Nothing in
+  dsh 0.2 writes a `.bak-<stamp>` name, so that leg is best-effort by nature. A field the current
   schema has dropped is dropped rather than guessing, a provider whose policy holds
   nothing this version reads is reported rather than written as an empty object, and an
   absent field stays absent so the schema's default still applies.

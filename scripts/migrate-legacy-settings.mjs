@@ -6,7 +6,7 @@
  * but only for entries whose plugin registered a `Config`, and this plugin's Host
  * half never did (it called `settings.installSection`, which 0.2 removed, and
  * nothing threw). So on an upgrade the plugin's whole section was left behind: it
- * is absent from `settings.yaml.imported`, the plugin boots with every default,
+ * is left out of the import, the plugin boots with every default,
  * and the settings page has no row to write to — dsh's config editor refuses the
  * write with "overridden by a home patch or command-line overlay".
  *
@@ -186,10 +186,19 @@ export function toRowConfig(legacy, keys) {
 }
 
 /**
- * Every file a 1.7.x install could have left the section in, newest last-resort
- * first. `settings.yaml.imported` is what 0.2 leaves behind — but it holds only the
- * sections 0.2 could import, which never included this one, so the timestamped
- * backups are usually the only copy that survives.
+ * Every file a 1.7.x install could have left the section in.
+ *
+ * `settings.yaml` is where 1.7.x wrote it. `settings.yaml.imported` is where dsh
+ * renames that file, and a section the import rejects stays in the renamed document —
+ * so `.imported` is where the section normally still is, and it is consulted second
+ * only because a hand-written `settings.yaml` would be the newer statement.
+ *
+ * The timestamped backups are the tail, and they matter for a reason that is nobody's
+ * contract: `.imported` is a file a user can edit or delete, and losing the section
+ * from it is exactly the kind of accident that leaves the backup as the only copy
+ * left. Nothing in dsh 0.2 writes a `.bak-<stamp>` name, so this leg is best-effort by
+ * nature — it costs a directory listing and finds the section when everything else has
+ * been tidied away.
  * @param dshHome - the DSH home directory.
  * @returns candidate paths, in the order they should be consulted.
  */
