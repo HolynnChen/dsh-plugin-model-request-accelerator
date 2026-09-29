@@ -305,6 +305,136 @@ The update itself is a fast-forward pull in the plugin's own directory — exact
 
 ### Upgrading from 1.7.x
 
+What you have to do depends on where you are coming from, and one of the three cases
+needs nothing at all.
+
+| Coming from | What happens | What to do |
+| --- | --- | --- |
+| 1.7.x, upgrading straight to 2.1.0 or later | dsh imports the section itself, because this version's `Config` is one dsh can import | Nothing. Check the settings page shows your providers |
+| Already on 2.0.0–2.0.3 | That release registered no importable `Config`, so dsh left your section behind | Re-run the installer, or the migrator by hand |
+| Already on 2.x and the section is gone | `.imported` was edited or deleted after the upgrade | The migrator falls back to a `settings.yaml.bak-*`; if there is none, set it up again in the page |
+
+**The installer carries them across by itself**, so for most people the upgrade is just
+running it again. The migrator can also be run on its own, and can be asked what it
+would do first:
+
+```sh
+node scripts/migrate-legacy-settings.mjs --profile web --dry-run   # show what it would write
+node scripts/migrate-legacy-settings.mjs --profile web             # write it
+```
+
+Either way it prints which file it read, so there is nothing to guess at:
+
+```
+==> migrated your 1.7.x settings from /Users/you/.dsh/settings.yaml.imported
+```
+
+If it says `no settings to migrate: ...` instead, read the rest of the line — it names
+the reason, and the three reasons are all fine: the row already carries settings, there
+is no row yet (so register it first), or there is no legacy section left to find. Exit
+code `3` means "nothing to do" rather than a failure, which is what the installer keys
+off; `1` means a real failure, and the installer says so and leaves the file alone.
+
+#### Why this is needed at all
+
+1.7.x kept settings in `$DSH_HOME/settings.yaml`, keyed by this plugin's section id, and
+2.x reads them from the loader row's `config` instead. dsh migrates old sections by
+itself, but only for a plugin entry that exposes a `Config` with a volatile field —
+1.7.x's Host half registered none, having called `settings.installSection`, which 0.2
+removed. So this plugin's section was the one dsh left behind, and the symptom was an
+upgrade that booted with every provider off, offered no row to configure, and refused a
+save with `Configuration for "model-request-accelerator" is overridden by a home patch
+or command-line overlay`. **2.1.0's `Config` is importable**, so this cannot happen again
+for anyone upgrading from here.
+
+#### Where it looks
+
+`settings.yaml` first — a file a user wrote by hand is the newer statement of intent —
+then `settings.yaml.imported`, which is where dsh renames the old file and where a
+section the import rejected stays, then any `settings.yaml.bak-*`. That last fallback
+exists because `.imported` is an ordinary file: editing or deleting it is easy, and
+doing so leaves a backup as the only copy left.
+
+#### What it will not do
+
+- **It never overwrites a row that already carries settings.** Both the migrator and the
+  settings page write the same block, so re-running the installer cannot undo a change
+  you made in the page. Every run after the first reports nothing to do.
+- **It never invents a value.** A field the current version no longer declares is
+  dropped, and an absent field stays absent so the schema's default still applies
+  instead of being pinned into the row. A provider whose policy holds nothing this
+  version reads is reported rather than written as an empty object.
+- **It runs even if you installed the plugin by hand.** It finds `yaml` through dsh's
+  own tree, so it works from a checkout whose dependencies were never installed.
+
+## Uninstall
+
+Delete the `model-request-accelerator` entry from `cordis.patch.yml` (and the cloned directory). The change is live; reload the page and the card is gone.
+
+## Tests
+
+```bash
+npm test
+```
+
+- `test/host.test.mjs` runs the real `apply()` against a fake Cordis context and a spied `globalThis.fetch`, covering schema resolution, the settings hook contract, `llm/stream` attribution, and the fetch rewrite. Its fixture deliberately reproduces the awkward case — two routes sharing one endpoint — to prove the switch is genuinely per-provider. It also measures a **real** request end to end: a local SSE endpoint whose think time, first-token delay and decode window are separated on purpose, driven through the plugin's real transport diagnostics.
+- `test/client.test.mjs` executes the real browser bundle under a stubbed module loader and a hook-tracking React stand-in, so it can render the card, click it and re-render: that the bundle id matches the package name, that the card registers on the settings namespace and starts **collapsed**, that the timing switch writes a top-level field, and that the timing view is registered only while the preference is on — including that it stays undecided until the first section arrives and is added or removed as the preference changes.
+- `test/timing.test.mjs` drives the phase arithmetic with injected clocks, so every boundary is asserted at an exact millisecond, including the cases where a phase is genuinely absent.
+- `test/prewarm.test.mjs` covers the prefix scanner and the field reordering against bodies of both shapes, including the ones that must be refused.
+- `test/transport.test.mjs` covers the h2 decision and its fallback with both injection points faked, so none of it needs a network: the TLS/opt-in rules, one Agent per origin, the refusal to cross two undici instances, a failure condemning an origin exactly once, an abort *not* condemning it, and the announced-but-failed connection that must not be reported as a protocol.
+- `test/version.test.mjs` covers three-part comparison, including the cases a string comparison gets wrong and the ones that must not be read as an update.
+- `test/install.test.mjs` runs the installer against throwaway profiles, twice each, from a pristine patch layer, one that already has entries, an empty file and no file at all — pinning the case where an empty array must be replaced rather than appended to, and that an upgrade from 1.7.x gains its old settings exactly once.
+- `test/migrate.test.mjs` covers the migration: the section found in `.imported` and in a backup, a row that already carries settings left untouched, a malformed patch refused rather than half-written, an absent field staying absent so the schema's default still applies, and the stated provider field list failing the build when it drifts from the schema.
+
+## Layout
+
+| File | Role |
+| --- | --- |
+| `install.sh` | One-command installer: clones the package into the profile and registers it in `cordis.patch.yml`. |
+| `lib/compress.js` | Compression decision core: policy compilation, endpoint index, attribution resolution, the encoding plan, header rewriting. No Cordis, globals, or zlib, so it is directly unit-testable. |
+| `lib/timing.js` | Timing state machine: phase boundaries, throughput, the per-session ring buffer, and the summary the page renders. Pure over injected clocks. |
+| `lib/index.js` | Host half: settings section, `llm/stream` attribution, the timing measurement and its authenticated `/api` route, `globalThis.fetch` patch and restore. |
+| `lib/client.js` | Browser half: the settings card and the request-timing view. Plain CJS factory contract, no JSX or ESM syntax. |
+| `lib/prewarm.js` | Pre-transmission core: the shared-prefix scanner, the field reordering, and the body-shape checks. Pure, so it is unit-testable. |
+| `lib/transport.js` | The HTTP/2 transport: resolves one undici module instance, pairs its `fetch` with its own `allowH2` Agent, decides per request, and condemns an origin that failed. Optional by construction — with no undici resolvable, h2 is simply off. |
+| `lib/ledger.js` | The durable per-session store, built on the deployment's storage domain. |
+| `lib/version.js` | Three-part version parsing and comparison, which the update button reads. |
+| `scripts/migrate-legacy-settings.mjs` | Moves a 1.7.x `settings.yaml` section into the loader row this version reads. Idempotent, and never overwrites settings the page has written. |
+| `scripts/probe-encodings.mjs` | Asks an endpoint which request encodings it decodes, before there is traffic to learn from. |
+| `README.zh.md` | Chinese documentation. |
+
+## License
+
+[MIT](./LICENSE)
+
+## Protocols
+
+The plugin reads the request body's **shape**, not a protocol name. Pre-transmission and the field reordering need a top-level array that a conversation is appended to, and both chat-completions (`messages`) and Anthropic-shaped (`messages`) bodies have one, as do Responses-shaped bodies (`input`). A body whose `input` is a plain string has no such array and gets no pre-transmission rather than a wrong one — the panel reports it as `不适用` instead of an empty pool. Request-body compression and the timing breakdown are transport-level and apply to every protocol.
+
+## What each endpoint has taught us
+
+The settings card reports, per endpoint, what real traffic has established: whether a compressed body was ever refused (and so whether gzip has taken over from brotli), whether pre-transmission was switched off because the endpoint would not take a chunked body, and how many compression attempts have failed in a row. It is a record of observations, not a probe — nothing is sent to produce it — and it stays **silent until there is something to report**, so an endpoint that has behaved simply says nothing. `scripts/probe-encodings.mjs` remains the way to ask the question before any traffic exists.
+
+## What this cannot do
+
+The plugin sits at `fetch`, so it only ever sees requests that go through it, and it only rewrites bodies it can prove are safe to rewrite.
+
+- **Signed bodies are left alone.** A request carrying `x-amz-content-sha256` (AWS-style signing) never has its body compressed: the signature covers the body's bytes, so compressing it would break the signature, and the resulting authorization failure is not a shape rejection — the fallback that recovers from a refused encoding would never trigger. Bedrock-style transports are out of scope for the same reason the reference implementation lists them as such.
+- **Transports that do not use `fetch`** — WebSocket, or an SDK with its own HTTP stack — are never seen at all.
+- **HTTP/3 is out of reach on this stack.** undici has no HTTP/3 or QUIC code, and Node 24.12 ships neither `nghttp3` nor `ngtcp2`, so there is nothing to drive it with — and a hand-built HTTP/3 transport would cost every undici diagnostic the timing view and the pre-transmission pool depend on. HTTP/2 is offered because it is a transport swap on the same diagnostics, not a replacement for them.
+- **Compression needs the far end to decode it.** gzip is near-universal; brotli is not. If an endpoint answers 411/415/501 to a compressed body the plugin retries it as gzip, remembers the endpoint, and gets out of the way; `scripts/probe-encodings.mjs` answers the same question up front, with a one-token request instead of a real conversation.
+- **The plugin can be slower than the wrapper, not faster.** It moves bytes off the critical path and shrinks them; it does not change what the model does with them.
+
+Release notes live in [CHANGELOG.md](./CHANGELOG.md).
+
+## Updating
+
+The plugin carries a three-part version (`package.json`, currently `2.1.0`), and the settings card shows it with a button. **Opening the card checks by itself** and says so — a check that ran in the last five minutes is reused rather than repeated, and the button always asks afresh. **检查更新** asks the Host for the version published on the repository's `main` branch and compares the two; when the published one is newer the button becomes **更新到 X**.
+
+The update itself is a fast-forward pull in the plugin's own directory — exactly what the installer does — run without a shell and with a timeout. A version that cannot be parsed on either side is never treated as newer, so a typo cannot offer a downgrade. **After an update the plugin still runs the old code until `dsh web` is restarted**; the card says so.
+
+### Upgrading from 1.7.x
+
 Your settings are carried across by the installer, or by this on its own:
 
 ```sh

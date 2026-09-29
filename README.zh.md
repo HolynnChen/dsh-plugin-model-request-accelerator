@@ -279,16 +279,42 @@ Release notes live in [CHANGELOG.md](./CHANGELOG.md).
 
 ### 从 1.7.x 升级
 
-旧设置由安装脚本自动带过来，也可以单独跑：
+要做什么取决于你从哪儿来，其中一种情况**什么都不用做**。
+
+| 你的处境 | 会发生什么 | 要做什么 |
+| --- | --- | --- |
+| 1.7.x，直接升到 2.1.0 或更新 | dsh 自己就会导入这一段，因为本版本的 `Config` 是 dsh 能导入的 | 什么都不用做。去设置页确认提供方开关还在 |
+| 已经在 2.0.0–2.0.3 | 那个版本注册的 `Config` 无法被导入，所以 dsh 把这一段留下了 | 重跑安装脚本，或手跑迁移脚本 |
+| 已经在 2.x，但段已经没了 | 升级后 `.imported` 被改过或删过 | 迁移脚本会退回到 `settings.yaml.bak-*`；如果连备份也没有，就在设置页里重新配一次 |
+
+**安装脚本会自己把设置带过来**，所以对大多数人来说「升级」就是把它再跑一遍。迁移脚本也可以单独跑，并且可以先问它会写成什么：
 
 ```sh
 node scripts/migrate-legacy-settings.mjs --profile web --dry-run   # 只显示会写成什么
 node scripts/migrate-legacy-settings.mjs --profile web             # 真正写入
 ```
 
-1.7.x 把设置放在 `$DSH_HOME/settings.yaml` 的 `model-request-accelerator` 段里，2.0 改为从 loader 行的 `config` 读取。dsh 自己会迁移旧段，但**只针对那些暴露了带 volatile 字段的 `Config` 的插件条目**——而 1.7.x 的 Host half 一个都没注册（它调用的是 0.2 已删除的 `settings.installSection`）。于是本插件的段正是 dsh 留下的那一段：升级后会以「所有提供方都关着、设置页没有可写入口、保存时报 `Configuration for "model-request-accelerator" is overridden by a home patch or command-line overlay`」的形态启动。
+无论哪种方式，它都会打印**读的是哪个文件**，不需要猜：
 
-迁移脚本会在段还活着的地方把它读出来——先 `settings.yaml`，再 `settings.yaml.imported`（dsh 重命名的落点，被拒绝的段就留在那里），最后是任何 `settings.yaml.bak-*`——然后写进插件所在的行。最后这一路之所以存在，是因为 `.imported` 只是一个普通文件：改掉或删掉都很容易，而一旦如此，备份就成了唯一的副本。可以反复运行：一旦该行已有设置就什么也不做，并且**绝不覆盖设置页已经写入的那一行**，因为两者编辑的是同一块。当前版本已不再声明的字段会被丢弃而不是猜测，某个提供方的策略里如果没有任何本版本认识的字段，会被报告出来而不是写成一个空对象。
+```
+==> migrated your 1.7.x settings from /Users/you/.dsh/settings.yaml.imported
+```
+
+如果它输出的是 `no settings to migrate: ...`，请把这一行读完——它写明了原因，而三种原因都是正常的：该行已经有设置了、还没有该行（那就先注册）、或者已经找不到旧段了。退出码 `3` 表示「无事可做」而不是失败，安装脚本正是靠它区分的；`1` 才是真正的失败，这时安装脚本会明确告知，并且不去动那个文件。
+
+#### 为什么需要这一步
+
+1.7.x 把设置放在 `$DSH_HOME/settings.yaml` 的 `model-request-accelerator` 段里，2.x 改为从 loader 行的 `config` 读取。dsh 自己会迁移旧段，但**只针对那些暴露了带 volatile 字段的 `Config` 的插件条目**——而 1.7.x 的 Host half 一个都没注册（它调用的是 0.2 已删除的 `settings.installSection`）。于是本插件的段正是 dsh 留下的那一段，症状是升级后以「所有提供方都关着、设置页没有可写入口、保存时报 `Configuration for "model-request-accelerator" is overridden by a home patch or command-line overlay`」的形态启动。**2.1.0 的 `Config` 是可以被导入的**，所以从这里往后升级的人不会再遇到这个问题。
+
+#### 它会去哪些地方找
+
+先 `settings.yaml`（用户手写的文件是更新的意图表达），再 `settings.yaml.imported`（dsh 重命名旧文件的落点，被导入拒绝的段就留在那里），最后是任何 `settings.yaml.bak-*`。最后这一路之所以存在，是因为 `.imported` 只是一个普通文件：改掉或删掉都很容易，而一旦如此，备份就成了唯一的副本。
+
+#### 它不会做的事
+
+- **绝不覆盖已经带有设置的行。** 迁移脚本和设置页写的是同一块，所以重跑安装脚本不可能撤销你在页面里做过的改动。第一次之后的每次运行都会报告无事可做。
+- **绝不凭空造值。** 当前版本已不再声明的字段会被丢弃；缺失字段保持缺失，以便 schema 默认值继续生效，而不是被钉死进行里。某个提供方的策略里如果没有任何本版本认识的字段，会被报告出来而不是写成一个空对象。
+- **手工安装的插件也能用。** 它通过 dsh 自己的依赖树找到 `yaml`，因此从一个从未安装过依赖的 checkout 里也能正常运行。
 
 ## 卸载
 

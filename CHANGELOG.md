@@ -6,14 +6,18 @@ something a user can see has changed.
 
 ## 2.1.1
 
-- Documentation only — no behaviour changed. The 2.1.0 entry described the backup file
-  as the usual place the stranded section is found, and reasoned from a copy where that
-  was true. It is not the usual place: dsh names `.imported` as where a rejected section
-  stays, and that is normally where it is. The backups are consulted because
-  `.imported` is an ordinary file that a user can edit or delete, and losing the section
-  from it leaves a backup as the only copy — which is a real way to arrive at this, not
-  a curiosity. The code was already right in both cases; the comments and the README
-  now say what is actually true.
+- Documentation only — no behaviour changed. The upgrade section now answers the
+  question people actually ask, which is what *they* have to do: a table of the three
+  starting points (including the one that needs nothing, because 2.1.0's `Config` is
+  importable and dsh's own import now handles a straight 1.7.x upgrade), what the
+  migrator prints and what its exit codes mean, and an explicit list of what it will
+  not do.
+
+  One correction to the 2.1.0 entry below, which reasoned from a single copy: the
+  timestamped backup is **not** the usual place the stranded section is found. dsh
+  renames the document before writing anything and a section the import rejects stays
+  in the renamed file, so `.imported` normally holds it — and the backups are consulted
+  because `.imported` is an ordinary file a user can edit or delete.
 
 ## 2.1.0
 
