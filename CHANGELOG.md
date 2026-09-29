@@ -4,6 +4,17 @@ Three-part versions. The panel's **检查更新** button compares the installed
 `package.json` with the one on `main`, so an entry here is worth a release only when
 something a user can see has changed.
 
+## 2.0.3
+
+- **HTTP/2 works again, and the tests that cover it pass.** The transport resolved
+  undici by walking up from its own file, with the comment that an installed plugin
+  lives at `<profile>/plugins/<name>/` so Node reaches the profile's hoisted tree. That
+  holds for a copy, not for a plugin installed by link: Node resolves the link's real
+  path — the checkout — where nothing named `undici` exists, so `loadUndici()` returned
+  undefined, HTTP/2 was skipped, and the process used Node's own transport. The copy is
+  now also resolved through dsh's own resolution and through `DSH_PROFILE_DIR`, which
+  reaches the profile's tree either way.
+
 ## 2.0.2
 
 - **The per-provider switches can be written.** With the section projected, saving one
